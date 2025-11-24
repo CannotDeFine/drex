@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package remote_service;
+
+// 请求的设备类型
+enum ReqDeviceType {
+    kCPU  = 0;
+    kDPU  = 1;
+    kFPGA = 2;
+    kGPU  = 3;
+    kNPU  = 4;
+    kOFA  = 5;
+}
+
+// 任务状态
+enum TaskStatus {
+    kSuccess = 0;
+    kFailed  = 1;
+}
+
+// 上传的文件类型
+enum TaskFileType {
+    kFileUnknown    = 0;
+    kFileExecutable = 1;
+    kFileScript     = 2;
+    kFileDataset    = 3;
+    kFileResult     = 4;
+}
+
+// 任务请求
+message TaskRequest {
+    bytes task = 1;
+    ReqDeviceType device_type = 2;
+    string ip_address = 3;
+    string path = 4;
+    TaskFileType file_type = 5;
+    bool file_start = 6;
+    bool file_end = 7;
+    int64 file_size = 8;
+}
+
+// 任务返回结果
+message TaskResult {
+    TaskStatus status = 1;
+    bytes result = 2;
+    int64 length = 3;
+}
+
+
+service TaskManage {
+    rpc TaskSubmission(stream TaskRequest) returns(TaskResult) {}
+}

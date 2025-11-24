@@ -1,0 +1,91 @@
+syntax = "proto2";
+package hcp;
+option cc_generic_services = true;
+
+message Status {
+    required int32 errcode = 1;
+    optional string errmsg = 2;
+}
+
+message ApplyResourceRequest {
+    optional string type = 1;  
+	optional int32 nums = 2;
+	optional int32 memreq = 3;
+    optional int32 corereq = 4;
+}
+
+message ApplyResourceResponse {
+    required Status status = 1;
+    optional string task_id = 2;
+}
+
+message QueryResourceRequest {
+    required string task_id = 1;
+}
+
+message NodeId {
+    required uint32 ip = 1;
+    required int32 port = 2;
+}
+
+message ResourceInfo {
+    optional int32 id = 1;
+    optional string uuid = 2;
+    optional string type = 3;
+    optional int32 devmem = 4;
+    optional int32 devcore = 5;
+    optional NodeId node = 6;
+}
+
+message QueryResourceResponse {
+    required Status status = 1;
+    repeated ResourceInfo rinfos = 2;
+}
+
+message ReleaseResourceRequest {
+    required string task_id = 1;
+}
+
+message ReleaseResourceResponse {
+    required Status status = 1;
+}
+
+message DeviceInfo {
+    optional string id = 1;
+    optional int32 index = 2;
+    optional int32 count = 3;
+    optional int32 devmem = 4;
+    optional int32 devcore = 5;
+    optional string type = 6;
+    optional string device_vendor = 7;
+    optional NodeId node_id = 8;
+}
+
+message DeviceUsage {
+    optional int32 used = 1;
+    optional int32 usedmem = 2;
+    optional int32 usedcores = 3;
+}
+
+message RegisterDeviceRequest {
+    repeated DeviceInfo devices = 1;
+}
+
+message RegisterDeviceResponse {
+    required Status status = 1;
+}
+
+message ListDeviceRequest {}
+
+message ListDeviceResponse {
+    repeated DeviceInfo dinfos = 1;
+    repeated DeviceUsage dusages = 2;
+}
+
+service ResourceControlService {
+    rpc apply_resource(ApplyResourceRequest) returns (ApplyResourceResponse); 
+    rpc query_resource(QueryResourceRequest) returns (QueryResourceResponse); 
+    rpc release_resource(ReleaseResourceRequest) returns (ReleaseResourceResponse);
+    rpc register_device(RegisterDeviceRequest) returns (RegisterDeviceResponse);
+    rpc list_device(ListDeviceRequest) returns (ListDeviceResponse);
+}
