@@ -1,20 +1,20 @@
-#include "remote_service.grpc.pb.h"
-#include "remote_service.pb.h"
-
 #include <absl/flags/flag.h>
 #include <absl/flags/parse.h>
 #include <absl/strings/ascii.h>
 #include <absl/strings/str_split.h>
 #include <absl/strings/string_view.h>
 #include <grpcpp/grpcpp.h>
+#include <sys/time.h>
 
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
-#include <sys/time.h>
 #include <vector>
+
+#include "remote_service.grpc.pb.h"
+#include "remote_service.pb.h"
 
 using grpc::Channel;
 using grpc::ClientContext;
@@ -233,8 +233,8 @@ int main(int argc, char** argv) {
     gettimeofday(&start, nullptr);
     client.TaskSubmit(files, static_cast<ReqDeviceType>(device));
     gettimeofday(&end, nullptr);
-    double elapsed =
-        (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec) / 1'000'000.0;
+    double elapsed = (end.tv_sec - start.tv_sec) +
+                     (end.tv_usec - start.tv_usec) / 1'000'000.0;
     std::cout << elapsed << std::endl;
   }
 

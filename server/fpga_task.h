@@ -4,11 +4,11 @@
 #include "task_executor.h"
 
 class FpgaExecutor : public TaskExecutor {
-public:
-    explicit FpgaExecutor(const TaskRequest& request) : TaskExecutor(request) {}
-    ~FpgaExecutor() override = default;
+ public:
+  explicit FpgaExecutor(const TaskRequest& request) : TaskExecutor(request) {}
+  ~FpgaExecutor() override = default;
 
-    grpc::Status Execute(TaskResult* result) override;
+  grpc::Status Execute(TaskResult* result) override;
 };
 
 #endif

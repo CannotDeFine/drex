@@ -4,11 +4,11 @@
 #include "task_executor.h"
 
 class OfaExecutor : public TaskExecutor {
-public:
-    explicit OfaExecutor(const TaskRequest& request) : TaskExecutor(request) {}
-    ~OfaExecutor() override = default;
+ public:
+  explicit OfaExecutor(const TaskRequest& request) : TaskExecutor(request) {}
+  ~OfaExecutor() override = default;
 
-    grpc::Status Execute(TaskResult* result) override;
+  grpc::Status Execute(TaskResult* result) override;
 };
 
 #endif
