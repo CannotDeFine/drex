@@ -10,15 +10,18 @@ using remote_service::TaskRequest;
 using remote_service::TaskResult;
 
 class TaskExecutor {
- public:
-  TaskExecutor(const TaskRequest& request);
-  virtual ~TaskExecutor();
+  public:
+    TaskExecutor(const TaskRequest &request);
+    virtual ~TaskExecutor();
 
- virtual grpc::Status Execute(TaskResult* result) = 0;
+    virtual grpc::Status Execute(TaskResult *result) = 0;
 
- protected:
-  grpc::Status RunTaskAndCapture(std::string* output) const;
-  TaskRequest request_;
+  protected:
+    grpc::Status RunTaskAndCapture(std::string *output) const;
+    grpc::Status ReadResultFile(std::string *data) const;
+    grpc::Status PopulateSuccessResult(const std::string &command_output,
+                                       TaskResult *result) const;
+    TaskRequest request_;
 };
 
 #endif

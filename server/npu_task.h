@@ -4,11 +4,11 @@
 #include "task_executor.h"
 
 class NpuExecutor : public TaskExecutor {
- public:
-  explicit NpuExecutor(const TaskRequest& request) : TaskExecutor(request) {}
-  ~NpuExecutor() override = default;
+  public:
+    explicit NpuExecutor(const TaskRequest &request) : TaskExecutor(request) {}
+    ~NpuExecutor() override = default;
 
-  grpc::Status Execute(TaskResult* result) override;
+    grpc::Status Execute(TaskResult *result) override;
 };
 
 #endif

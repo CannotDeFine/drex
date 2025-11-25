@@ -4,11 +4,11 @@
 #include "task_executor.h"
 
 class GpuExecutor : public TaskExecutor {
- public:
-  explicit GpuExecutor(const TaskRequest& request) : TaskExecutor(request) {}
-  ~GpuExecutor() override = default;
+  public:
+    explicit GpuExecutor(const TaskRequest &request) : TaskExecutor(request) {}
+    ~GpuExecutor() override = default;
 
-  grpc::Status Execute(TaskResult* result) override;
+    grpc::Status Execute(TaskResult *result) override;
 };
 
 #endif

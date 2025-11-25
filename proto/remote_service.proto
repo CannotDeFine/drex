@@ -37,6 +37,7 @@ message TaskRequest {
     bool file_start = 6;
     bool file_end = 7;
     int64 file_size = 8;
+    string result_path = 9;
 }
 
 // 任务返回结果

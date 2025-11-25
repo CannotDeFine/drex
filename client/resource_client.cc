@@ -10,14 +10,12 @@
 std::string Uint32ToIP(uint32_t ip_uint32) {
     uint32_t ip = ntohl(ip_uint32);
     std::ostringstream oss;
-    oss << ((ip >> 24) & 0xFF) << "."
-        << ((ip >> 16) & 0xFF) << "."
-        << ((ip >> 8) & 0xFF)  << "."
-        << (ip & 0xFF);
+    oss << ((ip >> 24) & 0xFF) << "." << ((ip >> 16) & 0xFF) << "."
+        << ((ip >> 8) & 0xFF) << "." << (ip & 0xFF);
     return oss.str();
 }
 
-int main () {
+int main() {
     brpc::Channel channel;
     brpc::ChannelOptions options;
     options.protocol = "baidu_std";
@@ -41,7 +39,8 @@ int main () {
 
     if (cntl1.Failed() || apply_res.status().errcode() != 0) {
         LOG(ERROR) << "Apply Resource failed: "
-                   << (cntl1.Failed() ? cntl1.ErrorText() : apply_res.status(). errmsg());
+                   << (cntl1.Failed() ? cntl1.ErrorText()
+                                      : apply_res.status().errmsg());
         return -1;
     }
 
@@ -58,15 +57,16 @@ int main () {
 
     if (cntl2.Failed() || query_res.status().errcode() != 0) {
         LOG(ERROR) << "query_resource failed: "
-                   << (cntl2.Failed() ? cntl2.ErrorText() : query_res.status().errmsg());
+                   << (cntl2.Failed() ? cntl2.ErrorText()
+                                      : query_res.status().errmsg());
         return -1;
     }
 
     // Step 3: print node addresses.
     for (int i = 0; i < query_res.rinfos_size(); ++i) {
-        const hcp::ResourceInfo& info = query_res.rinfos(i);
+        const hcp::ResourceInfo &info = query_res.rinfos(i);
         if (info.has_node()) {
-            const hcp::NodeId& node = info.node();
+            const hcp::NodeId &node = info.node();
             std::string ip_str = Uint32ToIP(node.ip());
             std::cout << "Resource[" << i << "]: IP=" << ip_str
                       << ", Port=" << node.port() << std::endl;
@@ -74,5 +74,4 @@ int main () {
     }
 
     return 0;
-
 }

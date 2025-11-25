@@ -4,11 +4,11 @@
 #include "task_executor.h"
 
 class DpuExecutor : public TaskExecutor {
- public:
-  explicit DpuExecutor(const TaskRequest& request) : TaskExecutor(request) {}
-  ~DpuExecutor() override = default;
+  public:
+    explicit DpuExecutor(const TaskRequest &request) : TaskExecutor(request) {}
+    ~DpuExecutor() override = default;
 
-  grpc::Status Execute(TaskResult* result) override;
+    grpc::Status Execute(TaskResult *result) override;
 };
 
 #endif
