@@ -64,7 +64,8 @@ grpc::Status RemoteServiceImplement::TaskSubmission(
   grpc::Status download_status = DownloadFile(request, result, &task_request);
   if (!download_status.ok()) {
     result->set_status(remote_service::kFailed);
-    result->set_result(download_status.error_message());
+    result->set_message(download_status.error_message());
+    result->clear_result();
     result->set_length(0);
     return download_status;
   }
@@ -72,7 +73,8 @@ grpc::Status RemoteServiceImplement::TaskSubmission(
   auto task = TaskFactory::Create(task_request);
   if (!task) {
     result->set_status(remote_service::kFailed);
-    result->set_result("Unknown device type!");
+    result->set_message("Unknown device type!");
+    result->clear_result();
     result->set_length(0);
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
                         "Unknown device type!");
@@ -80,13 +82,8 @@ grpc::Status RemoteServiceImplement::TaskSubmission(
 
   grpc::Status exec_status = task->Execute(result);
   if (!exec_status.ok()) {
-    result->set_status(remote_service::kFailed);
-    result->set_result(exec_status.error_message());
     return exec_status;
   }
-
-  result->set_status(remote_service::kSuccess);
-  result->set_result("Success to receive file!");
 
   return grpc::Status::OK;
 }
@@ -102,7 +99,8 @@ grpc::Status RemoteServiceImplement::DownloadFile(
       fs::weakly_canonical(fs::current_path(), workspace_ec);
   if (workspace_ec) {
     result->set_status(remote_service::kFailed);
-    result->set_result("");
+    result->set_message("Failed to determine server workspace!");
+    result->clear_result();
     result->set_length(0);
     return grpc::Status(grpc::StatusCode::INTERNAL,
                         "Failed to determine server workspace!");
@@ -110,7 +108,8 @@ grpc::Status RemoteServiceImplement::DownloadFile(
 
   auto set_failure = [&](const grpc::Status& status) {
     result->set_status(remote_service::kFailed);
-    result->set_result(status.error_message());
+    result->set_message(status.error_message());
+    result->clear_result();
     result->set_length(0);
     return status;
   };

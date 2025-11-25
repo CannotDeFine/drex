@@ -44,6 +44,7 @@ message TaskResult {
     TaskStatus status = 1;
     bytes result = 2;
     int64 length = 3;
+    string message = 4;
 }
 
 

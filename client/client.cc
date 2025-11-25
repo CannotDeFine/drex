@@ -183,14 +183,20 @@ void RemoteServiceClient::TaskSubmit(const std::vector<UploadFileSpec>& files,
   }
 
   if (response.status() != remote_service::kSuccess) {
-    std::cerr << "Server execution failed: " << response.result() << std::endl;
+    std::cerr << "Server execution failed: " << response.message()
+              << std::endl;
   }
 
   std::cout << "Upload completed" << std::endl;
   std::cout << "Client sent: " << total_bytes << " bytes" << std::endl;
   std::cout << "Server received: " << response.length() << " bytes"
             << std::endl;
-  std::cout << "Server response: " << response.result() << std::endl;
+  std::cout << "Server message: " << response.message() << std::endl;
+  if (!response.result().empty()) {
+    std::cout << "Server output (" << response.result().size()
+              << " bytes):" << std::endl;
+    std::cout << response.result() << std::endl;
+  }
   std::cout << "Elapsed: " << elapsed << " seconds" << std::endl;
 }
 
