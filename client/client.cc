@@ -32,6 +32,8 @@ ABSL_FLAG(std::string, save_path, "./server_task.bin",
           "Destination path for the primary executable on server.");
 ABSL_FLAG(std::string, extra_files, "",
           "Comma separated list of extra files: type:local[:remote].");
+ABSL_FLAG(std::string, extra_dirs, "",
+          "Comma separated list of directories: type:local_dir[:remote_dir].");
 ABSL_FLAG(int, device, 0,
           "Device type (0=CPU, 1=DPU, 2=FPGA, 3=GPU, 4=NPU, 5=OFA).");
 ABSL_FLAG(std::string, result_path, "",
@@ -47,6 +49,12 @@ constexpr int kExecCount = 1;
 struct UploadFileSpec {
     std::string local_path;
     std::string remote_path;
+    remote_service::TaskFileType file_type = remote_service::kFileUnknown;
+};
+
+struct DirectorySpec {
+    std::string local_dir;
+    std::string remote_dir;
     remote_service::TaskFileType file_type = remote_service::kFileUnknown;
 };
 
@@ -83,6 +91,64 @@ bool ParseExtraFileSpec(absl::string_view spec, UploadFileSpec *out_spec) {
     }
 
     return true;
+}
+
+bool ParseDirectorySpec(absl::string_view spec, DirectorySpec* out_spec) {
+    std::vector<std::string> parts = absl::StrSplit(spec, ':');
+    if (parts.size() < 2 || parts[1].empty()) {
+        return false;
+    }
+
+    out_spec->file_type = ParseFileType(parts[0]);
+    out_spec->local_dir = parts[1];
+    if (parts.size() >= 3 && !parts[2].empty()) {
+        out_spec->remote_dir = parts[2];
+    } else {
+        fs::path local(out_spec->local_dir);
+        out_spec->remote_dir = local.filename().string();
+    }
+
+    return true;
+}
+
+void ExpandDirectory(const DirectorySpec& dir_spec,
+                     std::vector<UploadFileSpec>* files) {
+    std::error_code ec;
+    if (!fs::exists(dir_spec.local_dir, ec) ||
+        !fs::is_directory(dir_spec.local_dir, ec)) {
+        std::cerr << "Directory does not exist: " << dir_spec.local_dir
+                  << std::endl;
+        return;
+    }
+
+    fs::path base = fs::canonical(dir_spec.local_dir, ec);
+    if (ec) {
+        std::cerr << "Failed to canonicalize directory: " << dir_spec.local_dir
+                  << std::endl;
+        return;
+    }
+
+    for (const auto& entry :
+         fs::recursive_directory_iterator(base,
+                                           fs::directory_options::follow_directory_symlink)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        fs::path rel = fs::relative(entry.path(), base, ec);
+        if (ec) {
+            continue;
+        }
+        fs::path remote_root = dir_spec.remote_dir.empty()
+                                   ? base.filename()
+                                   : fs::path(dir_spec.remote_dir);
+        fs::path remote = remote_root / rel;
+
+        UploadFileSpec spec;
+        spec.local_path = entry.path().string();
+        spec.remote_path = remote.generic_string();
+        spec.file_type = dir_spec.file_type;
+        files->push_back(std::move(spec));
+    }
 }
 
 } // namespace
@@ -212,9 +278,10 @@ int main(int argc, char **argv) {
     const std::string target_str = absl::GetFlag(FLAGS_target);
     const std::string file_path = absl::GetFlag(FLAGS_file);
     const std::string save_path = absl::GetFlag(FLAGS_save_path);
-    const std::string extra_files_flag = absl::GetFlag(FLAGS_extra_files);
-    const int device = absl::GetFlag(FLAGS_device);
-    const std::string result_path = absl::GetFlag(FLAGS_result_path);
+  const std::string extra_files_flag = absl::GetFlag(FLAGS_extra_files);
+  const std::string extra_dirs_flag = absl::GetFlag(FLAGS_extra_dirs);
+  const int device = absl::GetFlag(FLAGS_device);
+  const std::string result_path = absl::GetFlag(FLAGS_result_path);
 
     if (file_path.empty()) {
         std::cerr << "Use --file to select executable file." << std::endl;
@@ -224,12 +291,27 @@ int main(int argc, char **argv) {
     std::vector<UploadFileSpec> files;
     files.push_back({file_path, save_path, remote_service::kFileExecutable});
 
-    if (!extra_files_flag.empty()) {
+  if (!extra_files_flag.empty()) {
         for (absl::string_view spec :
              absl::StrSplit(extra_files_flag, ',', absl::SkipWhitespace())) {
             if (spec.empty()) {
                 continue;
-            }
+  }
+
+  if (!extra_dirs_flag.empty()) {
+      for (absl::string_view spec :
+           absl::StrSplit(extra_dirs_flag, ',', absl::SkipWhitespace())) {
+          if (spec.empty()) {
+              continue;
+          }
+          DirectorySpec dir_spec;
+          if (!ParseDirectorySpec(spec, &dir_spec)) {
+              std::cerr << "Invalid directory spec: " << spec << std::endl;
+              continue;
+          }
+          ExpandDirectory(dir_spec, &files);
+      }
+  }
             UploadFileSpec extra;
             if (!ParseExtraFileSpec(spec, &extra)) {
                 std::cerr << "Invalid extra file spec: " << spec << std::endl;

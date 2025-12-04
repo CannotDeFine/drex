@@ -103,8 +103,32 @@ sudo apt install libcurl4-openssl-dev
 ./compile.sh
 ```
 
+## 二、使用说明
+1. 启动服务端（默认监听 `0.0.0.0:8063`）：
+   ```shell
+   ./build/remote_server --address=0.0.0.0 --port=8063
+   ```
+2. 运行 gRPC 客户端上传任务，可附带额外文件并指定回传的结果文件：
+   ```shell
+   ./build/remote_client \
+     --target=10.0.0.2:8063 \
+     --file=./application/cpu/app \
+     --save_path=tasks/app.bin \
+     --extra_files=script:./scripts/setup.sh:tasks/setup.sh,data:./inputs/input.dat:tasks/input.dat \
+     --extra_dirs=data:./dataset:tasks/dataset \
+     --result_path=tasks/output.log \
+     --device=0
+   ```
+   - `--extra_files` 使用 `type:本地路径[:服务端路径]` 语法（以逗号分隔多个条目），服务端会校验路径并只允许写在其工作目录中。
+   - `--extra_dirs` 使用 `type:本地目录[:服务端目录]` 语法，客户端会递归上传该目录下的所有文件并保留相对路径。
+   - `--result_path` 表示任务完成后需要从服务器返回的文件路径；若省略，则默认回传任务的标准输出。
+3. 如需整合资源申请和任务执行，可使用集成客户端：
+   ```shell
+   ./build/intergrated_client <controller_host:port> <local_app> <remote_app_path> [device_type] [result_path]
+   ```
 
-## 二、文件结构
+
+## 三、文件结构
 ```shell
 .
 ├── application     # for testing
@@ -119,7 +143,7 @@ sudo apt install libcurl4-openssl-dev
 └── tools
 ````
 
-## 三、TODO
+## 四、TODO
 
 1  任务执行器基类和各个算力任务的继承类的编写 已完成 \
 2  执行过程中命令的检查，确保只能在当前目录下进行操作 \
