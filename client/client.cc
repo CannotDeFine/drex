@@ -1,102 +1,156 @@
 #include <absl/flags/flag.h>
 #include <absl/flags/parse.h>
 
-#include <grpcpp/grpcpp.h>
-
+#include <cstdio>
+#include <filesystem>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
 #include "client_api.h"
 
-using remote_service::ReqDeviceType;
-
 ABSL_FLAG(std::string, target, "127.0.0.1:8063", "Server address.");
-ABSL_FLAG(std::string, file, "/home/cdf/rpc-work/application/cpu/app", "Local executable to submit.");
-ABSL_FLAG(std::string, save_path, "./server_task.bin", "Destination path for the primary executable on server.");
-ABSL_FLAG(std::string, extra_files, "", "Comma separated list of extra files: type:local[:remote].");
-ABSL_FLAG(std::string, extra_dirs, "", "Comma separated list of directories: type:local_dir[:remote_dir].");
-ABSL_FLAG(int, device, 0, "Device type (0=CPU, 1=DPU, 2=FPGA, 3=GPU, 4=NPU, 5=OFA).");
-ABSL_FLAG(std::string, server_result_path, "", "Path inside the server workspace whose contents should be returned after execution.");
-ABSL_FLAG(std::string, result_path, "", "[Deprecated] Alias for --server_result_path.");
+ABSL_FLAG(std::string, src_dir, "./task", "Local directory to upload to the server.");
+ABSL_FLAG(std::string, workspace_subdir, "uploaded_task", "Subdirectory under the server workspace for the uploaded folder.");
+ABSL_FLAG(std::string, command, "", "Command to execute inside the uploaded workspace directory.");
+
+namespace fs = std::filesystem;
 
 namespace {
 
-constexpr int kExecCount = 1;
+void PrintStageFailure(int stage, const std::string &message) {
+    std::cerr << "[Stage " << stage << "] " << message << std::endl;
+}
 
-int RunClientWorkflow(const std::vector<UploadFileSpec> &files, ReqDeviceType device, const std::string &target_str,
-                      const std::string &server_result_path, int exec_count) {
-    const std::string entry_path = files.front().remote_path.empty() ? "./server_task.bin" : files.front().remote_path;
-
-    RemoteServiceClient client(grpc::CreateChannel(target_str, grpc::InsecureChannelCredentials()));
-
-    for (int i = 0; i < exec_count; ++i) {
-        RemoteServiceClient::TaskSubmitReport report;
-        grpc::Status status = client.TaskSubmit(files, device, entry_path, server_result_path, &report);
-        if (!status.ok()) {
-            std::cerr << "RPC failed: " << status.error_message() << std::endl;
-            return 1;
-        }
-
-        if (report.response.status() != remote_service::kSuccess) {
-            std::cerr << "Server execution failed: " << report.response.message() << std::endl;
-            return 1;
-        }
-
-        std::cout << "Upload completed" << std::endl;
-        std::cout << "Client sent: " << report.bytes_sent << " bytes" << std::endl;
-        std::cout << "Server received: " << report.response.length() << " bytes" << std::endl;
-        std::cout << "Server message: " << report.response.message() << std::endl;
-        if (!report.response.result().empty()) {
-            std::cout << "Server output (" << report.response.result().size() << " bytes):" << std::endl;
-            std::cout << report.response.result() << std::endl;
-        }
-        std::cout << "Elapsed: " << report.elapsed_seconds << " seconds" << std::endl;
-        std::cout << report.elapsed_seconds << std::endl;
+std::string FormatBytes(int64_t bytes) {
+    static const char *kUnits[] = {"B", "KB", "MB", "GB", "TB"};
+    double size = static_cast<double>(bytes);
+    size_t unit = 0;
+    while (size >= 1024.0 && unit + 1 < std::size(kUnits)) {
+        size /= 1024.0;
+        ++unit;
     }
+    std::ostringstream oss;
+    if (unit == 0) {
+        oss << static_cast<int64_t>(size) << ' ' << kUnits[unit];
+    } else {
+        oss << std::fixed << std::setprecision(2) << size << ' ' << kUnits[unit];
+    }
+    return oss.str();
+}
+
+std::string FormatSeconds(double seconds) {
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(2) << seconds;
+    return oss.str();
+}
+
+std::string ShellEscape(const std::string &input) {
+    std::string escaped = "'";
+    for (char c : input) {
+        if (c == '\'') {
+            escaped += "'\\''";
+        } else {
+            escaped.push_back(c);
+        }
+    }
+    escaped.push_back('\'');
+    return escaped;
+}
+
+bool ExtractArchiveTo(const std::string &archive_data, const fs::path &destination) {
+    std::error_code ec;
+    fs::create_directories(destination, ec);
+    if (ec) {
+        return false;
+    }
+    ec.clear();
+    fs::path canonical_dest = fs::weakly_canonical(destination, ec);
+    if (ec) {
+        canonical_dest = destination;
+    }
+    const std::string command = "tar -xzf - -C " + ShellEscape(canonical_dest.string());
+    FILE *pipe = ::popen(command.c_str(), "w");
+    if (pipe == nullptr) {
+        return false;
+    }
+    const size_t written = std::fwrite(archive_data.data(), 1, archive_data.size(), pipe);
+    const int rc = ::pclose(pipe);
+    return written == archive_data.size() && rc == 0;
+}
+
+int RunClientWorkflow(const std::vector<UploadFileSpec> &files, const UploadStats &stats, const std::string &target_str,
+                      const std::string &workspace_subdir, const std::string &command, const std::string &restore_dir) {
+    RemoteServiceClient client(grpc::CreateChannel(target_str, grpc::InsecureChannelCredentials()));
+    RemoteServiceClient::TaskSubmitReport report;
+    grpc::Status status = client.TaskSubmit(files, workspace_subdir, command, &report, &stats);
+    if (!status.ok()) {
+        PrintStageFailure(2, "RPC failed during upload/execution: " + status.error_message());
+        return 1;
+    }
+
+    if (report.response.status() != remote_service::kSuccess) {
+        PrintStageFailure(3, "Server reported failure: " + report.response.message());
+        return 1;
+    }
+
+    fs::path restore_path = restore_dir.empty() ? fs::path(".") : fs::path(restore_dir);
+    std::cout << "[4/4] Restoring outputs to: " << restore_path << std::endl;
+    const std::string &archive = report.response.output_archive();
+    if (!ExtractArchiveTo(archive, restore_path)) {
+        PrintStageFailure(4, "Failed to extract outputs to " + restore_path.string());
+        return 1;
+    }
+
+    std::cout << "\nExecution success." << std::endl;
+    std::cout << "Exit code: 0" << std::endl;
+    std::cout << "Total time: " << FormatSeconds(report.elapsed_seconds) << " s" << std::endl;
 
     return 0;
 }
 
 } // namespace
 
-// Entry point that parses CLI flags and runs the upload workflow.
 int main(int argc, char **argv) {
     absl::ParseCommandLine(argc, argv);
     const std::string target_str = absl::GetFlag(FLAGS_target);
-    const std::string file_path = absl::GetFlag(FLAGS_file);
-    const std::string save_path = absl::GetFlag(FLAGS_save_path);
-    const std::string extra_files_flag = absl::GetFlag(FLAGS_extra_files);
-    const std::string extra_dirs_flag = absl::GetFlag(FLAGS_extra_dirs);
-    const int device = absl::GetFlag(FLAGS_device);
+    const std::string src_dir = absl::GetFlag(FLAGS_src_dir);
+    const std::string workspace_subdir = absl::GetFlag(FLAGS_workspace_subdir);
+    const std::string command = absl::GetFlag(FLAGS_command);
 
-    std::string server_result_path = absl::GetFlag(FLAGS_server_result_path);
-    const std::string deprecated_result_path = absl::GetFlag(FLAGS_result_path);
-    if (server_result_path.empty() && !deprecated_result_path.empty()) {
-        std::cerr << "[WARN] --result_path is deprecated, please use --server_result_path instead." << std::endl;
-        server_result_path = deprecated_result_path;
+    if (src_dir.empty()) {
+        std::cerr << "Use --src_dir to select a directory to upload." << std::endl;
+        return 1;
     }
-
-    if (file_path.empty()) {
-        std::cerr << "Use --file to select executable file." << std::endl;
+    if (command.empty()) {
+        std::cerr << "Use --command to specify how to execute the uploaded workspace." << std::endl;
         return 1;
     }
 
-    std::vector<UploadFileSpec> files;
-    files.push_back({file_path, save_path, remote_service::kFileExecutable});
+    std::cout << "[1/4] Validating local workspace..." << std::endl;
 
-    bool extras_ok = true;
-    extras_ok &= CollectExtraDirectories(extra_dirs_flag, &files);
-    extras_ok &= CollectExtraFiles(extra_files_flag, &files);
-    if (!extras_ok) {
+    std::vector<UploadFileSpec> files;
+    if (!CollectDirectoryFiles(src_dir, &files)) {
+        PrintStageFailure(1, "Failed to enumerate local directory: " + src_dir);
         return 1;
     }
 
     grpc::Status validation = ValidateUploadFiles(files);
     if (!validation.ok()) {
-        std::cerr << validation.error_message() << std::endl;
+        PrintStageFailure(1, "Validation failed: " + validation.error_message());
         return 1;
     }
 
-    return RunClientWorkflow(files, static_cast<ReqDeviceType>(device), target_str, server_result_path, kExecCount);
+    UploadStats stats;
+    if (!ComputeUploadStats(files, &stats)) {
+        PrintStageFailure(1, "Failed to compute workspace statistics.");
+        return 1;
+    }
+
+    std::cout << "    -> Found " << stats.file_count << " files, total " << FormatBytes(stats.total_bytes) << std::endl;
+    std::cout << "[2/4] Uploading workspace (" << stats.file_count << " files, " << FormatBytes(stats.total_bytes) << ")..." << std::endl;
+
+    return RunClientWorkflow(files, stats, target_str, workspace_subdir, command, src_dir);
 }

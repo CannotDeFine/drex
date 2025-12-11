@@ -1,5 +1,4 @@
-#include "remote_service.grpc.pb.h"
-#include "remote_service.pb.h"
+#include "client_api.h"
 #include "resource_control.pb.h"
 
 #include <brpc/channel.h>
@@ -7,7 +6,6 @@
 #include <grpcpp/grpcpp.h>
 
 #include <arpa/inet.h>
-#include <sys/time.h>
 
 #include <cstdint>
 #include <filesystem>
@@ -20,17 +18,6 @@
 #include <vector>
 
 namespace {
-
-using grpc::Channel;
-using grpc::ClientContext;
-using grpc::ClientWriter;
-using grpc::Status;
-using remote_service::ReqDeviceType;
-using remote_service::TaskManage;
-using remote_service::TaskRequest;
-using remote_service::TaskResult;
-
-constexpr size_t kChunkSize = 1024 * 1024;
 
 struct NodeInfo {
     std::string ip;
@@ -67,9 +54,7 @@ NodeInfo ApplyResourceAndGetNode(const std::string &controller_addr) {
 
     if (apply_cntl.Failed() || apply_response.status().errcode() != 0) {
         throw std::runtime_error(std::string("Apply resource failed: ") +
-                                 (apply_cntl.Failed()
-                                      ? apply_cntl.ErrorText()
-                                      : apply_response.status().errmsg()));
+                                 (apply_cntl.Failed() ? apply_cntl.ErrorText() : apply_response.status().errmsg()));
     }
 
     const std::string task_id = apply_response.task_id();
@@ -82,13 +67,10 @@ NodeInfo ApplyResourceAndGetNode(const std::string &controller_addr) {
 
     if (query_cntl.Failed() || query_response.status().errcode() != 0) {
         throw std::runtime_error(std::string("Query resource failed: ") +
-                                 (query_cntl.Failed()
-                                      ? query_cntl.ErrorText()
-                                      : query_response.status().errmsg()));
+                                 (query_cntl.Failed() ? query_cntl.ErrorText() : query_response.status().errmsg()));
     }
 
-    if (query_response.rinfos_size() <= 0 ||
-        !query_response.rinfos(0).has_node()) {
+    if (query_response.rinfos_size() <= 0 || !query_response.rinfos(0).has_node()) {
         throw std::runtime_error("No node information returned.");
     }
 
@@ -99,157 +81,86 @@ NodeInfo ApplyResourceAndGetNode(const std::string &controller_addr) {
     return info;
 }
 
-class RemoteServiceClient {
-  public:
-    explicit RemoteServiceClient(std::shared_ptr<Channel> channel)
-        : stub_(TaskManage::NewStub(channel)) {}
-
-    void TaskSubmit(const std::string &local_file, const std::string &save_path,
-                    ReqDeviceType device_type, const std::string &server_result_path);
-
-  private:
-    std::unique_ptr<TaskManage::Stub> stub_;
-};
-
-void RemoteServiceClient::TaskSubmit(const std::string &local_file,
-                                     const std::string &save_path,
-                                     ReqDeviceType device_type,
-                                     const std::string &server_result_path) {
-    std::ifstream infile(local_file, std::ios::binary);
-    if (!infile.is_open()) {
-        std::cerr << "Cannot open file: " << local_file << std::endl;
-        return;
-    }
-
-    ClientContext context;
-    TaskResult response;
-    std::unique_ptr<ClientWriter<TaskRequest>> writer(
-        stub_->TaskSubmission(&context, &response));
-
-    std::vector<char> buffer(kChunkSize);
-    TaskRequest config_request;
-    auto *config = config_request.mutable_config();
-    config->set_device_type(device_type);
-    config->set_ip_address("integrated-client");
-    config->set_entry_path(save_path);
-    if (!server_result_path.empty()) {
-        config->set_result_path(server_result_path);
-    }
-
-    if (!writer->Write(config_request)) {
-        std::cerr << "Failed to send task configuration." << std::endl;
-        writer->WritesDone();
-        writer->Finish();
-        return;
-    }
-
-    bool first_chunk = true;
-    int64_t total_bytes = 0;
-
-    std::error_code ec;
-    int64_t declared_size = -1;
-    const uintmax_t on_disk = std::filesystem::file_size(local_file, ec);
-    if (!ec) {
-        declared_size = static_cast<int64_t>(on_disk);
-    }
-
-    timeval start, end;
-    gettimeofday(&start, nullptr);
-
-    while (infile) {
-        infile.read(buffer.data(), buffer.size());
-        const std::streamsize bytes_read = infile.gcount();
-        if (bytes_read <= 0) {
-            break;
-        }
-
-        TaskRequest request;
-        auto *chunk = request.mutable_file_chunk();
-        chunk->set_data(buffer.data(), bytes_read);
-        chunk->set_path(save_path);
-        chunk->set_file_type(remote_service::kFileExecutable);
-        chunk->set_file_start(first_chunk);
-        if (first_chunk && declared_size >= 0) {
-            chunk->set_file_size(declared_size);
-        }
-        if (infile.eof()) {
-            chunk->set_file_end(true);
-        }
-        first_chunk = false;
-
-        total_bytes += bytes_read;
-        if (!writer->Write(request)) {
-            std::cerr << "Stream write failed (connection closed by server)."
-                      << std::endl;
-            break;
-        }
-    }
-
-    writer->WritesDone();
-    Status status = writer->Finish();
-
-    gettimeofday(&end, nullptr);
-    const double elapsed = (end.tv_sec - start.tv_sec) +
-                           (end.tv_usec - start.tv_usec) / 1'000'000.0;
-
+int ExecuteTask(const std::string &target, const std::vector<UploadFileSpec> &files, const std::string &workspace_subdir,
+                const std::string &command, const std::string &local_output_dir) {
+    RemoteServiceClient client(grpc::CreateChannel(target, grpc::InsecureChannelCredentials()));
+    RemoteServiceClient::TaskSubmitReport report;
+    grpc::Status status = client.TaskSubmit(files, workspace_subdir, command, &report);
     if (!status.ok()) {
         std::cerr << "RPC failed: " << status.error_message() << std::endl;
+        return 1;
     }
 
-    if (response.status() != remote_service::kSuccess) {
-        std::cerr << "Server execution failed: " << response.message()
-                  << std::endl;
+    if (report.response.status() != remote_service::kSuccess) {
+        std::cerr << "Server execution failed: " << report.response.message() << std::endl;
+        return 1;
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(local_output_dir, ec);
+    if (ec) {
+        std::cerr << "Failed to create local output directory: " << local_output_dir << std::endl;
+        return 1;
+    }
+
+    std::filesystem::path archive_path = std::filesystem::path(local_output_dir) / "server_output.tar.gz";
+    std::ofstream outfile(archive_path, std::ios::binary | std::ios::trunc);
+    if (!outfile.is_open()) {
+        std::cerr << "Failed to save server outputs to " << archive_path << std::endl;
+        return 1;
+    }
+    const std::string &archive = report.response.output_archive();
+    outfile.write(archive.data(), static_cast<std::streamsize>(archive.size()));
+    if (!outfile.good()) {
+        std::cerr << "Failed to write server output archive." << std::endl;
+        return 1;
     }
 
     std::cout << "Upload completed" << std::endl;
-    std::cout << "Client sent: " << total_bytes << " bytes" << std::endl;
-    std::cout << "Server received: " << response.length() << " bytes"
-              << std::endl;
-    std::cout << "Server message: " << response.message() << std::endl;
-    if (!response.result().empty()) {
-        std::cout << "Server output (" << response.result().size()
-                  << " bytes):" << std::endl;
-        std::cout << response.result() << std::endl;
-    }
-    std::cout << "Elapsed: " << elapsed << " seconds" << std::endl;
+    std::cout << "Server message: " << report.response.message() << std::endl;
+    std::cout << "Saved server outputs to: " << archive_path << std::endl;
+    std::cout << "Elapsed: " << report.elapsed_seconds << " seconds" << std::endl;
+
+    return 0;
 }
 
 } // namespace
 
 int main(int argc, char **argv) {
-    if (argc < 4) {
+    if (argc < 6) {
         std::cerr << "Usage: " << argv[0]
-                  << " <controller_addr(host:port)> <local_file> <remote_path> "
-                     "[device_type (0-5)] [server_result_path]"
-                  << std::endl;
+                  << " <controller_addr(host:port)> <src_dir> <workspace_subdir> <command> <local_output_dir>" << std::endl;
         return 1;
     }
 
     const std::string controller_addr = argv[1];
-    const std::string local_file = argv[2];
-    const std::string remote_path = argv[3];
-    int device_arg = 0;
-    if (argc >= 5) {
-        device_arg = std::stoi(argv[4]);
+    const std::string src_dir = argv[2];
+    const std::string workspace_subdir = argv[3];
+    const std::string command = argv[4];
+    const std::string local_output_dir = argv[5];
+
+    if (command.empty()) {
+        std::cerr << "Command must not be empty." << std::endl;
+        return 1;
     }
-    std::string server_result_path;
-    if (argc >= 6) {
-        server_result_path = argv[5];
+
+    std::vector<UploadFileSpec> files;
+    if (!CollectDirectoryFiles(src_dir, &files)) {
+        return 1;
+    }
+
+    grpc::Status validation = ValidateUploadFiles(files);
+    if (!validation.ok()) {
+        std::cerr << validation.error_message() << std::endl;
+        return 1;
     }
 
     try {
         NodeInfo node = ApplyResourceAndGetNode(controller_addr);
-        const std::string target =
-            node.ip + ":" + std::to_string(static_cast<int>(node.port));
-
-        RemoteServiceClient client(
-            grpc::CreateChannel(target, grpc::InsecureChannelCredentials()));
-        client.TaskSubmit(local_file, remote_path,
-                          static_cast<ReqDeviceType>(device_arg), server_result_path);
+        const std::string target = node.ip + ":" + std::to_string(static_cast<int>(node.port));
+        return ExecuteTask(target, files, workspace_subdir, command, local_output_dir);
     } catch (const std::exception &ex) {
         std::cerr << ex.what() << std::endl;
         return 1;
     }
-
-    return 0;
 }

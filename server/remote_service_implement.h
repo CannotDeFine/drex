@@ -1,25 +1,26 @@
 #ifndef REMOTE_SERVICE_IMPLEMENT_H
 #define REMOTE_SERVICE_IMPLEMENT_H
 
+#include <filesystem>
+#include <string>
+
 #include <grpcpp/grpcpp.h>
 
 #include "remote_service.grpc.pb.h"
 #include "remote_service.pb.h"
 
-using grpc::ServerReader;
-using remote_service::TaskManage;
-using remote_service::TaskRequest;
-using remote_service::TaskConfig;
-using remote_service::TaskResult;
+class WorkspaceLockGuard;
 
-class RemoteServiceImplement final : public TaskManage::Service {
+class RemoteServiceImplement final : public remote_service::TaskManage::Service {
   public:
-    grpc::Status TaskSubmission(grpc::ServerContext *context, ServerReader<TaskRequest> *request, TaskResult *result) override;
+    grpc::Status TaskSubmission(grpc::ServerContext *context,
+                                grpc::ServerReaderWriter<remote_service::TaskResponse, remote_service::TaskRequest> *stream) override;
     ~RemoteServiceImplement() override = default;
 
   private:
-    // Streams input files from the client and writes them to disk.
-    grpc::Status DownloadFile(ServerReader<TaskRequest> *request, TaskResult *result, TaskConfig *config_out);
+    grpc::Status DownloadWorkspace(grpc::ServerReaderWriter<remote_service::TaskResponse, remote_service::TaskRequest> *stream,
+                                   const std::filesystem::path &workspace_root, remote_service::TaskConfig *config_out,
+                                   WorkspaceLockGuard *lock_guard);
 };
 
 #endif

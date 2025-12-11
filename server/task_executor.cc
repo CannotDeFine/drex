@@ -1,6 +1,8 @@
+
 #include "task_executor.h"
 
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iterator>
@@ -8,35 +10,73 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-TaskExecutor::TaskExecutor(const TaskConfig &config) : config_(config) {}
-TaskExecutor::~TaskExecutor() = default;
+namespace fs = std::filesystem;
 
-/// @brief 检查并执行可执行文件，捕获其标准输出和标准错误输出
-/// @param output  
-grpc::Status TaskExecutor::RunTaskAndCapture(std::string *output) const {
-    if (output == nullptr) {
-        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Output container must not be null!");
-    }
-    output->clear();
+namespace {
 
-    const std::string file_name = config_.entry_path();
-    if (file_name.empty()) {
-        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Task path is empty!");
-    }
-
-    if (access(file_name.c_str(), F_OK) != 0) {
-        return grpc::Status(grpc::StatusCode::NOT_FOUND, "Error: File not found!");
-    }
-
-    if (access(file_name.c_str(), X_OK) != 0) {
-        struct stat st;
-        if (stat(file_name.c_str(), &st) != 0) {
-            return grpc::Status(grpc::StatusCode::INTERNAL, "Failed to stat task file!");
-        }
-        if (chmod(file_name.c_str(), st.st_mode | S_IXUSR) != 0) {
-            return grpc::Status(grpc::StatusCode::PERMISSION_DENIED, "Error: No execute permission!");
+std::string ShellEscape(const std::string &input) {
+    std::string escaped = "'";
+    for (char c : input) {
+        if (c == '\'') {
+            escaped += "'\\''";
+        } else {
+            escaped.push_back(c);
         }
     }
+    escaped.push_back('\'');
+    return escaped;
+}
+
+} // namespace
+
+TaskExecutor::TaskExecutor(const remote_service::TaskConfig &config, const fs::path &workspace_root,
+                           grpc::ServerReaderWriter<remote_service::TaskResponse, remote_service::TaskRequest> *stream)
+    : config_(config), workspace_root_(workspace_root), stream_(stream) {}
+
+grpc::Status TaskExecutor::Execute(remote_service::TaskResult *result) const {
+    if (config_.command().empty()) {
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Command must not be empty!");
+    }
+
+    fs::path run_dir = (workspace_root_ / config_.workspace_subdir()).lexically_normal();
+    fs::path output_dir = (workspace_root_ / config_.output_subdir()).lexically_normal();
+
+    std::error_code ec;
+    fs::create_directories(run_dir, ec);
+    if (ec) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, "Failed to prepare workspace directory for execution!");
+    }
+
+    std::string combined_output;
+    grpc::Status run_status = RunCommand(&combined_output);
+    if (!run_status.ok()) {
+        return run_status;
+    }
+
+    grpc::Status write_status = WriteTerminalOutput(combined_output, &output_dir);
+    if (!write_status.ok()) {
+        return write_status;
+    }
+
+    std::string archive_data;
+    grpc::Status archive_status = CreateOutputArchive(output_dir, &archive_data);
+    if (!archive_status.ok()) {
+        return archive_status;
+    }
+
+    result->set_status(remote_service::kSuccess);
+    result->set_message("Task executed successfully.");
+    result->set_output_archive(archive_data);
+    result->set_archive_size(static_cast<int64_t>(archive_data.size()));
+
+    return grpc::Status::OK;
+}
+
+grpc::Status TaskExecutor::RunCommand(std::string *combined_output) const {
+    if (combined_output == nullptr) {
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Output buffer must not be null!");
+    }
+    combined_output->clear();
 
     int pipefd[2];
     if (pipe(pipefd) != 0) {
@@ -49,13 +89,15 @@ grpc::Status TaskExecutor::RunTaskAndCapture(std::string *output) const {
         close(pipefd[1]);
         return grpc::Status(grpc::StatusCode::INTERNAL, std::string("Fork failed: ") + std::strerror(errno));
     } else if (pid == 0) {
+        if (chdir((workspace_root_ / config_.workspace_subdir()).c_str()) != 0) {
+            _exit(127);
+        }
         close(pipefd[0]);
         if (dup2(pipefd[1], STDOUT_FILENO) < 0 || dup2(pipefd[1], STDERR_FILENO) < 0) {
             _exit(127);
         }
         close(pipefd[1]);
-        char *argv[] = {const_cast<char *>(file_name.c_str()), nullptr};
-        execv(file_name.c_str(), argv);
+        execl("/bin/sh", "sh", "-c", config_.command().c_str(), static_cast<char *>(nullptr));
         _exit(127);
     }
 
@@ -63,7 +105,8 @@ grpc::Status TaskExecutor::RunTaskAndCapture(std::string *output) const {
     char buffer[4096];
     ssize_t bytes_read = 0;
     while ((bytes_read = read(pipefd[0], buffer, sizeof(buffer))) > 0) {
-        output->append(buffer, static_cast<size_t>(bytes_read));
+        combined_output->append(buffer, static_cast<size_t>(bytes_read));
+        EmitLogChunk(std::string(buffer, static_cast<size_t>(bytes_read)));
     }
     close(pipefd[0]);
 
@@ -73,7 +116,7 @@ grpc::Status TaskExecutor::RunTaskAndCapture(std::string *output) const {
 
     int status = 0;
     if (waitpid(pid, &status, 0) < 0) {
-        return grpc::Status(grpc::StatusCode::INTERNAL, "Failed to wait for child process!");
+        return grpc::Status(grpc::StatusCode::INTERNAL, "Failed to wait for task process!");
     }
 
     if (WIFEXITED(status)) {
@@ -82,8 +125,7 @@ grpc::Status TaskExecutor::RunTaskAndCapture(std::string *output) const {
             return grpc::Status(grpc::StatusCode::INTERNAL, "Task failed with exit code: " + std::to_string(exit_code));
         }
     } else if (WIFSIGNALED(status)) {
-        const int sig = WTERMSIG(status);
-        return grpc::Status(grpc::StatusCode::INTERNAL, "Task killed by signal: " + std::to_string(sig));
+        return grpc::Status(grpc::StatusCode::INTERNAL, "Task terminated by signal: " + std::to_string(WTERMSIG(status)));
     } else {
         return grpc::Status(grpc::StatusCode::INTERNAL, "Task ended abnormally!");
     }
@@ -91,57 +133,70 @@ grpc::Status TaskExecutor::RunTaskAndCapture(std::string *output) const {
     return grpc::Status::OK;
 }
 
-/// @brief 如果配置指定 result_path, 从该路径读取文件返回
-/// @param data  
-grpc::Status TaskExecutor::ReadResultFile(std::string *data) const {
-    if (data == nullptr) {
-        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Result container must not be null!");
-    }
-    data->clear();
-
-    if (config_.result_path().empty()) {
-        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Result path is empty!");
+grpc::Status TaskExecutor::WriteTerminalOutput(const std::string &output, fs::path *output_dir) const {
+    if (output_dir == nullptr) {
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Output directory pointer must not be null!");
     }
 
-    std::ifstream infile(config_.result_path(), std::ios::binary);
-    if (!infile.is_open()) {
-        return grpc::Status(grpc::StatusCode::NOT_FOUND, "Result file not found on server!");
+    std::error_code ec;
+    fs::create_directories(*output_dir, ec);
+    if (ec) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, "Failed to create output directory on server!");
     }
 
-    data->assign(std::istreambuf_iterator<char>(infile), std::istreambuf_iterator<char>());
-    if (!infile.good() && !infile.eof()) {
-        return grpc::Status(grpc::StatusCode::INTERNAL, "Failed to read result file!");
+    fs::path log_path = *output_dir / "terminal_output.txt";
+    std::ofstream log_file(log_path, std::ios::binary | std::ios::trunc);
+    if (!log_file.is_open()) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, "Failed to create terminal output file!");
     }
+    log_file.write(output.data(), static_cast<std::streamsize>(output.size()));
+    if (!log_file.good()) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, "Failed to write terminal output file!");
+    }
+    return grpc::Status::OK;
+}
+
+grpc::Status TaskExecutor::CreateOutputArchive(const fs::path &output_dir, std::string *archive_data) const {
+    if (archive_data == nullptr) {
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Archive buffer must not be null!");
+    }
+    archive_data->clear();
+
+    fs::path parent_dir = output_dir.parent_path();
+    fs::path entry_name = output_dir.filename();
+    if (entry_name.empty()) {
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Output directory name is invalid!");
+    }
+
+    fs::path archive_path = workspace_root_ / (entry_name.string() + ".tar.gz");
+
+    std::string command =
+        "tar -czf " + ShellEscape(archive_path.string()) + " -C " + ShellEscape(parent_dir.string()) + " " + ShellEscape(entry_name.generic_string());
+    int ret = std::system(command.c_str());
+    if (ret != 0) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, "Failed to archive output directory!");
+    }
+
+    std::ifstream archive_file(archive_path, std::ios::binary);
+    if (!archive_file.is_open()) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, "Failed to open archive for reading!");
+    }
+    archive_data->assign(std::istreambuf_iterator<char>(archive_file), std::istreambuf_iterator<char>());
+    if (!archive_file.good() && !archive_file.eof()) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, "Failed to read archive data!");
+    }
+
+    std::error_code remove_ec;
+    fs::remove(archive_path, remove_ec);
 
     return grpc::Status::OK;
 }
 
-/// @brief 填充 TaskResult 以表示成功执行任务
-/// @param command_output 
-/// @param result  
-grpc::Status TaskExecutor::PopulateSuccessResult(const std::string &command_output, TaskResult *result) const {
-    if (result == nullptr) {
-        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Result pointer must not be null!");
+void TaskExecutor::EmitLogChunk(const std::string &chunk) const {
+    if (stream_ == nullptr || chunk.empty()) {
+        return;
     }
-
-    std::string payload = command_output;
-    std::string message = "Task executed successfully.";
-
-    if (!config_.result_path().empty()) {
-        std::string file_data;
-        grpc::Status status = ReadResultFile(&file_data);
-        if (!status.ok()) {
-            return status;
-        }
-        payload.swap(file_data);
-        message = "Task executed successfully. Result file transferred to the "
-                  "client.";
-    }
-
-    result->set_status(remote_service::kSuccess);
-    result->set_result(payload);
-    result->set_length(static_cast<int64_t>(payload.size()));
-    result->set_message(message);
-
-    return grpc::Status::OK;
+    remote_service::TaskResponse response;
+    response.mutable_log_chunk()->set_data(chunk);
+    stream_->Write(response);
 }

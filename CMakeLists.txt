@@ -127,12 +127,6 @@ add_executable(remote_server
     server/server.cc
     server/remote_service_implement.cc
     server/task_executor.cc
-    server/asic_task.cc
-    server/cpu_task.cc
-    server/dpu_task.cc
-    server/fpga_task.cc
-    server/gpu_task.cc
-    server/npu_task.cc
 )
 target_link_libraries(remote_server
     remote_grpc_proto
@@ -173,6 +167,7 @@ target_link_libraries(resource_client
 
 add_executable(intergrated_client
     client/intergrated_client.cc
+    client/client_api.cc
     ${resource_control_proto_hdrs}
     ${resource_control_proto_srcs}
 )

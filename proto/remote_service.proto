@@ -2,50 +2,25 @@ syntax = "proto3";
 
 package remote_service;
 
-// 请求的设备类型
-enum ReqDeviceType {
-    kCPU  = 0;
-    kDPU  = 1;
-    kFPGA = 2;
-    kGPU  = 3;
-    kNPU  = 4;
-    kOFA  = 5;
-}
-
-// 任务状态
 enum TaskStatus {
     kSuccess = 0;
     kFailed  = 1;
 }
 
-// 上传的文件类型
-enum TaskFileType {
-    kFileUnknown    = 0;
-    kFileExecutable = 1;
-    kFileScript     = 2;
-    kFileDataset    = 3;
-    kFileResult     = 4;
-}
-
-// 任务配置，与文件内容分离
 message TaskConfig {
-    ReqDeviceType device_type = 1;
-    string ip_address = 2;
-    string entry_path = 3;
-    string result_path = 4;
+    string workspace_subdir = 1;
+    string command = 2;
+    string output_subdir = 3;
 }
 
-// 单个文件分块
 message TaskFileChunk {
     bytes data = 1;
-    string path = 2;
-    TaskFileType file_type = 3;
-    bool file_start = 4;
-    bool file_end = 5;
-    int64 file_size = 6;
+    string relative_path = 2;
+    bool file_start = 3;
+    bool file_end = 4;
+    int64 file_size = 5;
 }
 
-// 任务请求
 message TaskRequest {
     oneof payload {
         TaskConfig config = 1;
@@ -53,15 +28,24 @@ message TaskRequest {
     }
 }
 
-// 任务返回结果
 message TaskResult {
     TaskStatus status = 1;
-    bytes result = 2;
-    int64 length = 3;
-    string message = 4;
+    string message = 2;
+    bytes output_archive = 3;
+    int64 archive_size = 4;
 }
 
+message TaskLogChunk {
+    bytes data = 1;
+}
+
+message TaskResponse {
+    oneof payload {
+        TaskLogChunk log_chunk = 1;
+        TaskResult result = 2;
+    }
+}
 
 service TaskManage {
-    rpc TaskSubmission(stream TaskRequest) returns(TaskResult) {}
+    rpc TaskSubmission(stream TaskRequest) returns(stream TaskResponse) {}
 }

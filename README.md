@@ -104,27 +104,29 @@ sudo apt install libcurl4-openssl-dev
 ```
 
 ## 二、使用说明
+为了方便部署，服务器会把所有上传的内容放进项目根目录下的 `workspace/`，因此建议始终从仓库根目录运行二进制文件，或在启动前手动创建好该目录。客户端在上传文件时会重新写入数据，原始可执行权限不会被保留，如有需要请在 `--command` 中自行调用 `chmod +x`。
+
 1. 启动服务端（默认监听 `0.0.0.0:8063`）：
    ```shell
    ./build/remote_server --address=0.0.0.0 --port=8063
    ```
-2. 运行 gRPC 客户端上传任务，可附带额外文件并指定回传的结果文件：
+2. 运行 gRPC 客户端上传整个目录、指定执行命令以及输出目录：
    ```shell
    ./build/remote_client \
      --target=10.0.0.2:8063 \
-     --file=./application/cpu/app \
-     --save_path=tasks/app.bin \
-     --extra_files=script:./scripts/setup.sh:tasks/setup.sh,data:./inputs/input.dat:tasks/input.dat \
-     --extra_dirs=data:./dataset:tasks/dataset \
-     --server_result_path=tasks/output.log \
-     --device=0
+     --src_dir=./workspace/my_job \
+     --workspace_subdir=jobs/my_job \
+     --command="./run.sh --config configs/train.yaml"
    ```
-   - `--extra_files` 使用 `type:本地路径[:服务端路径]` 语法（以逗号分隔多个条目），服务端会校验路径并只允许写在其工作目录中。
-   - `--extra_dirs` 使用 `type:本地目录[:服务端目录]` 语法，客户端会递归上传该目录下的所有文件并保留相对路径。
-   - `--server_result_path` 表示任务完成后需要从服务器返回的文件路径（位于服务器工作目录内）；若省略，则默认回传任务的标准输出。`--result_path` 仍可用但已弃用，仅作兼容别名。
+   - `--src_dir`：本地需要上传的目录，客户端会递归遍历并保持相对路径。
+   - `--workspace_subdir`：服务器 `workspace/` 下的落盘子目录，所有文件会被一一同步。
+   - `--command`：服务器在 `workspace/<workspace_subdir>` 中执行的命令，底层通过 `sh -c` 启动，可将多条命令串联。
+   - 服务器端输出固定写在 `<workspace_subdir>/output`，执行结束后 `terminal_output.txt` 和其他结果会被打包并自动解压回本地 `--src_dir/output/`，无需额外参数。
+
+客户端与服务器之间使用双向流式 RPC。上传阶段客户端持续发送文件块；执行阶段服务器会把标准输出和标准错误实时推送为 log chunk，客户端终端能够立即看到远程日志。任务完成后服务器把 `<workspace_subdir>/output` 打包为 `TaskResult` 附件，客户端直接把压缩包解压到 `--src_dir/output/`，因此本地工作目录会同步远端运行所生成的全部文件。
 3. 如需整合资源申请和任务执行，可使用集成客户端：
    ```shell
-   ./build/intergrated_client <controller_host:port> <local_app> <remote_app_path> [device_type] [server_result_path]
+   ./build/intergrated_client <controller_host:port> <src_dir> <workspace_subdir> <command> <local_output_dir>
    ```
 
 
@@ -143,10 +145,11 @@ sudo apt install libcurl4-openssl-dev
 └── tools
 ````
 
-## 四、TODO
-
-1  任务执行器基类和各个算力任务的继承类的编写 已完成 \
-2  执行过程中命令的检查，确保只能在当前目录下进行操作 \
-3  不应该用户指定在服务端存储的文件路径 \
-4  脚本和数据传递，以及需要能传递结果的数据结构 \
-5  更安全的版本 fork + exec 避免使用system 已完成
+## 四、How to use
+```shell
+./build/remote_client \
+  --target=server_ip:port \
+  --src_dir=/path/to/local/folder \
+  --workspace_subdir=father_folder \
+  --command="command to build your project"
+```

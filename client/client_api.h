@@ -1,12 +1,11 @@
 #ifndef REMOTE_CLIENT_API_H
 #define REMOTE_CLIENT_API_H
-
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include <absl/strings/string_view.h>
 #include <grpcpp/grpcpp.h>
 
 #include "remote_service.grpc.pb.h"
@@ -14,18 +13,16 @@
 
 struct UploadFileSpec {
     std::string local_path;
-    std::string remote_path;
-    remote_service::TaskFileType file_type = remote_service::kFileUnknown;
+    std::string relative_path;
 };
 
-struct DirectorySpec {
-    std::string local_dir;
-    std::string remote_dir;
-    remote_service::TaskFileType file_type = remote_service::kFileUnknown;
+struct UploadStats {
+    std::size_t file_count = 0;
+    int64_t total_bytes = 0;
 };
 
-bool CollectExtraFiles(absl::string_view flag_value, std::vector<UploadFileSpec> *files);
-bool CollectExtraDirectories(absl::string_view flag_value, std::vector<UploadFileSpec> *files);
+bool CollectDirectoryFiles(const std::string &root_dir, std::vector<UploadFileSpec> *files);
+bool ComputeUploadStats(const std::vector<UploadFileSpec> &files, UploadStats *stats);
 grpc::Status ValidateUploadFiles(const std::vector<UploadFileSpec> &files);
 
 class RemoteServiceClient {
@@ -38,8 +35,8 @@ class RemoteServiceClient {
         double elapsed_seconds = 0.0;
     };
 
-    grpc::Status TaskSubmit(const std::vector<UploadFileSpec> &files, remote_service::ReqDeviceType device_type,
-                            const std::string &entry_path, const std::string &result_path, TaskSubmitReport *report);
+    grpc::Status TaskSubmit(const std::vector<UploadFileSpec> &files, const std::string &workspace_subdir, const std::string &command,
+                            TaskSubmitReport *report, const UploadStats *upload_stats = nullptr);
 
   private:
     std::unique_ptr<remote_service::TaskManage::Stub> stub_;

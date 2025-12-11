@@ -1,15 +1,28 @@
-#include "remote_service_implement.h"
-#include "task_factory.h"
 
-#include <cstdlib>
+#include "remote_service_implement.h"
+
+#include "task_executor.h"
+
 #include <filesystem>
 #include <fstream>
-#include <sys/stat.h>
-#include <unistd.h>
+#include <mutex>
+#include <system_error>
+#include <unordered_set>
+
+using remote_service::TaskConfig;
+using remote_service::TaskRequest;
+using remote_service::TaskResponse;
+using remote_service::TaskResult;
 
 namespace fs = std::filesystem;
 
 namespace {
+
+const fs::path kServerSourceDir = fs::path(__FILE__).parent_path();
+const fs::path kProjectRoot = kServerSourceDir.parent_path();
+const fs::path kWorkspaceRoot = kProjectRoot / "workspace";
+std::mutex g_workspace_lock_mu;
+std::unordered_set<std::string> g_locked_subdirs;
 
 bool IsSubPath(const fs::path &base, const fs::path &candidate) {
     auto base_it = base.begin();
@@ -22,127 +35,183 @@ bool IsSubPath(const fs::path &base, const fs::path &candidate) {
     return true;
 }
 
-grpc::Status ResolveTaskFilePath(const std::string &requested_path, const fs::path &canonical_workspace_root, fs::path *resolved_path) {
-    fs::path candidate_path;
-    if (requested_path.empty()) {
-        candidate_path = canonical_workspace_root / "server_task.bin";
-    } else {
-        fs::path requested(requested_path);
-        candidate_path = requested.is_absolute() ? requested : canonical_workspace_root / requested;
-    }
+fs::path LexicallyNormalized(const fs::path &base, const fs::path &suffix) {
+    return (base / suffix).lexically_normal();
+}
 
-    std::error_code ec;
-    fs::path canonical_target = fs::weakly_canonical(candidate_path, ec);
-    if (ec) {
-        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Failed to resolve task file path!");
-    }
+std::string DefaultIfEmpty(const std::string &value, const std::string &fallback) {
+    return value.empty() ? fallback : value;
+}
 
-    if (!IsSubPath(canonical_workspace_root, canonical_target)) {
-        return grpc::Status(grpc::StatusCode::PERMISSION_DENIED, "Task file path must stay within the server workspace!");
-    }
+void SendResult(grpc::ServerReaderWriter<TaskResponse, TaskRequest> *stream, const TaskResult &result) {
+    TaskResponse response;
+    *response.mutable_result() = result;
+    stream->Write(response);
+}
 
-    *resolved_path = canonical_target;
-    return grpc::Status::OK;
+void SendFailure(grpc::ServerReaderWriter<TaskResponse, TaskRequest> *stream, const std::string &message) {
+    TaskResult fail_result;
+    fail_result.set_status(remote_service::kFailed);
+    fail_result.set_message(message);
+    fail_result.clear_output_archive();
+    fail_result.set_archive_size(0);
+    SendResult(stream, fail_result);
 }
 
 } // namespace
 
-grpc::Status RemoteServiceImplement::TaskSubmission(grpc::ServerContext *context, ServerReader<TaskRequest> *request, TaskResult *result) {
-    TaskConfig task_config;
+class WorkspaceLockGuard {
+  public:
+    explicit WorkspaceLockGuard(const fs::path &workspace_root);
+    ~WorkspaceLockGuard();
 
-    grpc::Status download_status = DownloadFile(request, result, &task_config);
-    if (!download_status.ok()) {
-        result->set_status(remote_service::kFailed);
-        result->set_message(download_status.error_message());
-        result->clear_result();
-        result->set_length(0);
-        return download_status;
+    grpc::Status Acquire(const std::string &subdir_key);
+    void RegisterCleanupTargets(const std::string &workspace_subdir, const std::string &output_subdir);
+    void Release();
+
+  private:
+    void Cleanup();
+
+    fs::path workspace_root_;
+    std::string key_;
+    std::string workspace_subdir_;
+    std::string output_subdir_;
+    bool locked_ = false;
+    bool cleanup_registered_ = false;
+};
+
+WorkspaceLockGuard::WorkspaceLockGuard(const fs::path &workspace_root) : workspace_root_(workspace_root) {}
+
+WorkspaceLockGuard::~WorkspaceLockGuard() {
+    Cleanup();
+    Release();
+}
+
+grpc::Status WorkspaceLockGuard::Acquire(const std::string &subdir_key) {
+    if (locked_) {
+        if (subdir_key == key_) {
+            return grpc::Status::OK;
+        }
+        return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Workspace lock already acquired.");
+    }
+    if (subdir_key.empty()) {
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "workspace_subdir must not be empty.");
     }
 
-    auto task = TaskFactory::Create(task_config);
-    if (!task) {
-        result->set_status(remote_service::kFailed);
-        result->set_message("Unknown device type!");
-        result->clear_result();
-        result->set_length(0);
-        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Unknown device type!");
+    std::lock_guard<std::mutex> guard(g_workspace_lock_mu);
+    if (g_locked_subdirs.find(subdir_key) != g_locked_subdirs.end()) {
+        return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED, "workspace_subdir is currently occupied, choose a unique subdirectory.");
     }
-
-    grpc::Status exec_status = task->Execute(result);
-    if (!exec_status.ok()) {
-        return exec_status;
-    }
-
+    g_locked_subdirs.insert(subdir_key);
+    key_ = subdir_key;
+    locked_ = true;
     return grpc::Status::OK;
 }
 
-grpc::Status RemoteServiceImplement::DownloadFile(ServerReader<TaskRequest> *request, TaskResult *result, TaskConfig *config_out) {
-    TaskRequest task_request;
-    std::ofstream outfile;
-    fs::path current_file_path;
-    std::error_code workspace_ec;
-    fs::path workspace_root = fs::weakly_canonical(fs::current_path(), workspace_ec);
-    if (workspace_ec) {
-        result->set_status(remote_service::kFailed);
-        result->set_message("Failed to determine server workspace!");
-        result->clear_result();
-        result->set_length(0);
+void WorkspaceLockGuard::RegisterCleanupTargets(const std::string &workspace_subdir, const std::string &output_subdir) {
+    workspace_subdir_ = workspace_subdir;
+    output_subdir_ = output_subdir;
+    cleanup_registered_ = true;
+}
+
+void WorkspaceLockGuard::Release() {
+    if (!locked_) {
+        return;
+    }
+    std::lock_guard<std::mutex> guard(g_workspace_lock_mu);
+    g_locked_subdirs.erase(key_);
+    key_.clear();
+    locked_ = false;
+}
+
+void WorkspaceLockGuard::Cleanup() {
+    if (!cleanup_registered_) {
+        return;
+    }
+    auto remove_path = [&](const std::string &relative) {
+        if (relative.empty()) {
+            return;
+        }
+        std::error_code ec;
+        fs::remove_all((workspace_root_ / relative).lexically_normal(), ec);
+    };
+    remove_path(workspace_subdir_);
+    if (output_subdir_ != workspace_subdir_) {
+        remove_path(output_subdir_);
+    }
+    cleanup_registered_ = false;
+}
+
+grpc::Status RemoteServiceImplement::TaskSubmission(grpc::ServerContext * /*context*/, grpc::ServerReaderWriter<TaskResponse, TaskRequest> *stream) {
+    std::error_code ec;
+    fs::path workspace_root = fs::weakly_canonical(kWorkspaceRoot, ec);
+    if (ec) {
+        SendFailure(stream, "Failed to determine server workspace!");
         return grpc::Status(grpc::StatusCode::INTERNAL, "Failed to determine server workspace!");
     }
 
-    auto set_failure = [&](const grpc::Status &status) {
-        result->set_status(remote_service::kFailed);
-        result->set_message(status.error_message());
-        result->clear_result();
-        result->set_length(0);
-        return status;
-    };
+    WorkspaceLockGuard workspace_guard(workspace_root);
+    TaskConfig config;
+    grpc::Status download_status = DownloadWorkspace(stream, workspace_root, &config, &workspace_guard);
+    if (!download_status.ok()) {
+        SendFailure(stream, download_status.error_message());
+        return download_status;
+    }
 
-    const fs::path default_filename = workspace_root / "server_task.bin";
-    fs::path target_path = default_filename;
-    int64_t total_received = 0;
+    TaskExecutor executor(config, workspace_root, stream);
+    TaskResult result;
+    grpc::Status exec_status = executor.Execute(&result);
+    if (!exec_status.ok()) {
+        SendFailure(stream, exec_status.error_message());
+        return exec_status;
+    }
+
+    SendResult(stream, result);
+    return grpc::Status::OK;
+}
+
+grpc::Status RemoteServiceImplement::DownloadWorkspace(grpc::ServerReaderWriter<TaskResponse, TaskRequest> *stream,
+                                                       const fs::path &workspace_root, TaskConfig *config_out, WorkspaceLockGuard *lock_guard) {
+    TaskRequest incoming;
+    std::ofstream outfile;
+    fs::path current_file_path;
     bool received_config = false;
     TaskConfig config_buffer;
+    fs::path workspace_subdir_path;
 
-    auto sanitize_result_path = [&](const std::string &input, std::string *output) -> grpc::Status {
-        if (input.empty()) {
-            output->clear();
-            return grpc::Status::OK;
-        }
-        fs::path resolved;
-        grpc::Status st = ResolveTaskFilePath(input, workspace_root, &resolved);
-        if (!st.ok()) {
-            return st;
-        }
-        *output = resolved.string();
-        return grpc::Status::OK;
-    };
+    auto set_failure = [&](const grpc::Status &status) { return status; };
 
-    while (request->Read(&task_request)) {
-        if (task_request.has_config()) {
+    while (stream->Read(&incoming)) {
+        if (incoming.has_config()) {
             if (received_config) {
                 return set_failure(grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Duplicate TaskConfig payload!"));
             }
+            config_buffer = incoming.config();
+            const std::string workspace_subdir = DefaultIfEmpty(config_buffer.workspace_subdir(), "uploaded_task");
+            const std::string default_output = (fs::path(workspace_subdir) / "output").generic_string();
+            const std::string output_subdir = DefaultIfEmpty(config_buffer.output_subdir(), default_output);
+
+            workspace_subdir_path = LexicallyNormalized(workspace_root, workspace_subdir);
+            fs::path output_subdir_path = LexicallyNormalized(workspace_root, output_subdir);
+
+            if (!IsSubPath(workspace_root, workspace_subdir_path) || !IsSubPath(workspace_root, output_subdir_path)) {
+                return set_failure(grpc::Status(grpc::StatusCode::PERMISSION_DENIED, "Workspace or output directory escapes server workspace!"));
+            }
+
+            config_buffer.set_workspace_subdir(fs::relative(workspace_subdir_path, workspace_root).generic_string());
+            config_buffer.set_output_subdir(fs::relative(output_subdir_path, workspace_root).generic_string());
+            if (lock_guard != nullptr) {
+                grpc::Status lock_status = lock_guard->Acquire(config_buffer.workspace_subdir());
+                if (!lock_status.ok()) {
+                    return set_failure(lock_status);
+                }
+                lock_guard->RegisterCleanupTargets(config_buffer.workspace_subdir(), config_buffer.output_subdir());
+            }
             received_config = true;
-            config_buffer = task_request.config();
-
-            fs::path resolved_entry;
-            grpc::Status entry_status = ResolveTaskFilePath(config_buffer.entry_path(), workspace_root, &resolved_entry);
-            if (!entry_status.ok()) {
-                return set_failure(entry_status);
-            }
-            config_buffer.set_entry_path(resolved_entry.string());
-
-            std::string resolved_result;
-            grpc::Status result_status = sanitize_result_path(config_buffer.result_path(), &resolved_result);
-            if (!result_status.ok()) {
-                return set_failure(result_status);
-            }
-            config_buffer.set_result_path(resolved_result);
             continue;
         }
 
-        if (!task_request.has_file_chunk()) {
+        if (!incoming.has_file_chunk()) {
             return set_failure(grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "TaskRequest payload is missing!"));
         }
 
@@ -150,18 +219,17 @@ grpc::Status RemoteServiceImplement::DownloadFile(ServerReader<TaskRequest> *req
             return set_failure(grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "TaskConfig must be sent before file chunks!"));
         }
 
-        const auto &chunk = task_request.file_chunk();
-        if (!chunk.path().empty()) {
-            grpc::Status path_status = ResolveTaskFilePath(chunk.path(), workspace_root, &target_path);
-            if (!path_status.ok()) {
-                return set_failure(path_status);
-            }
-        } else if (!outfile.is_open()) {
-            target_path = default_filename;
+        const auto &chunk = incoming.file_chunk();
+        if (chunk.relative_path().empty()) {
+            return set_failure(grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "File chunk missing relative path!"));
+        }
+
+        fs::path target_path = LexicallyNormalized(workspace_subdir_path, chunk.relative_path());
+        if (!IsSubPath(workspace_subdir_path, target_path)) {
+            return set_failure(grpc::Status(grpc::StatusCode::PERMISSION_DENIED, "File path escapes uploaded workspace!"));
         }
 
         const bool need_new_file = !outfile.is_open() || chunk.file_start() || target_path != current_file_path;
-
         if (need_new_file) {
             if (outfile.is_open()) {
                 outfile.close();
@@ -173,7 +241,7 @@ grpc::Status RemoteServiceImplement::DownloadFile(ServerReader<TaskRequest> *req
             }
             outfile.open(target_path, std::ios::binary | std::ios::trunc);
             if (!outfile.is_open()) {
-                return set_failure(grpc::Status(grpc::StatusCode::INTERNAL, "Can not open file!"));
+                return set_failure(grpc::Status(grpc::StatusCode::INTERNAL, "Failed to open file for writing!"));
             }
             current_file_path = target_path;
         }
@@ -181,9 +249,8 @@ grpc::Status RemoteServiceImplement::DownloadFile(ServerReader<TaskRequest> *req
         if (!chunk.data().empty()) {
             outfile.write(chunk.data().data(), chunk.data().size());
             if (!outfile.good()) {
-                return set_failure(grpc::Status(grpc::StatusCode::INTERNAL, "Failed to write to file!"));
+                return set_failure(grpc::Status(grpc::StatusCode::INTERNAL, "Failed to write file chunk!"));
             }
-            total_received += static_cast<int64_t>(chunk.data().size());
         }
 
         if (chunk.file_end() && outfile.is_open()) {
@@ -200,8 +267,6 @@ grpc::Status RemoteServiceImplement::DownloadFile(ServerReader<TaskRequest> *req
         outfile.close();
     }
 
-    result->set_length(total_received);
     config_out->CopyFrom(config_buffer);
-
     return grpc::Status::OK;
 }

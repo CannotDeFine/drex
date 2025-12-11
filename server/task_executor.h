@@ -1,26 +1,29 @@
+
 #ifndef TASK_EXECUTE_H
 #define TASK_EXECUTE_H
 
+#include <filesystem>
 #include <string>
 
 #include <grpcpp/grpcpp.h>
 #include <remote_service.grpc.pb.h>
 
-using remote_service::TaskConfig;
-using remote_service::TaskResult;
-
 class TaskExecutor {
   public:
-    TaskExecutor(const TaskConfig &config);
-    virtual ~TaskExecutor();
+    TaskExecutor(const remote_service::TaskConfig &config, const std::filesystem::path &workspace_root,
+                 grpc::ServerReaderWriter<remote_service::TaskResponse, remote_service::TaskRequest> *stream);
 
-    virtual grpc::Status Execute(TaskResult *result) = 0;
+    grpc::Status Execute(remote_service::TaskResult *result) const;
 
-  protected:
-    grpc::Status RunTaskAndCapture(std::string *output) const;
-    grpc::Status ReadResultFile(std::string *data) const;
-    grpc::Status PopulateSuccessResult(const std::string &command_output, TaskResult *result) const;
-    TaskConfig config_;
+  private:
+    grpc::Status RunCommand(std::string *combined_output) const;
+    grpc::Status WriteTerminalOutput(const std::string &output, std::filesystem::path *output_dir) const;
+    grpc::Status CreateOutputArchive(const std::filesystem::path &output_dir, std::string *archive_data) const;
+    void EmitLogChunk(const std::string &chunk) const;
+
+    remote_service::TaskConfig config_;
+    std::filesystem::path workspace_root_;
+    grpc::ServerReaderWriter<remote_service::TaskResponse, remote_service::TaskRequest> *stream_;
 };
 
 #endif
