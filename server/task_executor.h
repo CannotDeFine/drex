@@ -6,12 +6,12 @@
 #include <grpcpp/grpcpp.h>
 #include <remote_service.grpc.pb.h>
 
-using remote_service::TaskRequest;
+using remote_service::TaskConfig;
 using remote_service::TaskResult;
 
 class TaskExecutor {
   public:
-    TaskExecutor(const TaskRequest &request);
+    TaskExecutor(const TaskConfig &config);
     virtual ~TaskExecutor();
 
     virtual grpc::Status Execute(TaskResult *result) = 0;
@@ -19,9 +19,8 @@ class TaskExecutor {
   protected:
     grpc::Status RunTaskAndCapture(std::string *output) const;
     grpc::Status ReadResultFile(std::string *data) const;
-    grpc::Status PopulateSuccessResult(const std::string &command_output,
-                                       TaskResult *result) const;
-    TaskRequest request_;
+    grpc::Status PopulateSuccessResult(const std::string &command_output, TaskResult *result) const;
+    TaskConfig config_;
 };
 
 #endif

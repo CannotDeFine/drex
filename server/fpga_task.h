@@ -5,7 +5,7 @@
 
 class FpgaExecutor : public TaskExecutor {
   public:
-    explicit FpgaExecutor(const TaskRequest &request) : TaskExecutor(request) {}
+    explicit FpgaExecutor(const TaskConfig &config) : TaskExecutor(config) {}
     ~FpgaExecutor() override = default;
 
     grpc::Status Execute(TaskResult *result) override;

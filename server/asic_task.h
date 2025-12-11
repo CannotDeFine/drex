@@ -5,7 +5,7 @@
 
 class OfaExecutor : public TaskExecutor {
   public:
-    explicit OfaExecutor(const TaskRequest &request) : TaskExecutor(request) {}
+    explicit OfaExecutor(const TaskConfig &config) : TaskExecutor(config) {}
     ~OfaExecutor() override = default;
 
     grpc::Status Execute(TaskResult *result) override;

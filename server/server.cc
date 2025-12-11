@@ -1,3 +1,6 @@
+/*
+*  Created a server application that hosts a gRPC service.
+*/
 #include <absl/flags/flag.h>
 #include <absl/flags/parse.h>
 #include <absl/log/initialize.h>

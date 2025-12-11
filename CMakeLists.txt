@@ -143,6 +143,7 @@ target_link_libraries(remote_server
 # client
 add_executable(remote_client
     client/client.cc
+    client/client_api.cc
 )
 target_link_libraries(remote_client
     remote_grpc_proto

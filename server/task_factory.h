@@ -13,20 +13,20 @@
 
 class TaskFactory {
   public:
-    static std::unique_ptr<TaskExecutor> Create(const TaskRequest &request) {
-        switch (request.device_type()) {
+    static std::unique_ptr<TaskExecutor> Create(const TaskConfig &config) {
+        switch (config.device_type()) {
         case remote_service::kOFA:
-            return std::make_unique<OfaExecutor>(request);
+            return std::make_unique<OfaExecutor>(config);
         case remote_service::kCPU:
-            return std::make_unique<CpuExecutor>(request);
+            return std::make_unique<CpuExecutor>(config);
         case remote_service::kGPU:
-            return std::make_unique<GpuExecutor>(request);
+            return std::make_unique<GpuExecutor>(config);
         case remote_service::kDPU:
-            return std::make_unique<DpuExecutor>(request);
+            return std::make_unique<DpuExecutor>(config);
         case remote_service::kFPGA:
-            return std::make_unique<FpgaExecutor>(request);
+            return std::make_unique<FpgaExecutor>(config);
         case remote_service::kNPU:
-            return std::make_unique<NpuExecutor>(request);
+            return std::make_unique<NpuExecutor>(config);
         // TODO: Add new device types here.
         default:
             return nullptr;

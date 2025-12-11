@@ -5,7 +5,7 @@
 
 class NpuExecutor : public TaskExecutor {
   public:
-    explicit NpuExecutor(const TaskRequest &request) : TaskExecutor(request) {}
+    explicit NpuExecutor(const TaskConfig &config) : TaskExecutor(config) {}
     ~NpuExecutor() override = default;
 
     grpc::Status Execute(TaskResult *result) override;

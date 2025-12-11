@@ -27,17 +27,30 @@ enum TaskFileType {
     kFileResult     = 4;
 }
 
+// 任务配置，与文件内容分离
+message TaskConfig {
+    ReqDeviceType device_type = 1;
+    string ip_address = 2;
+    string entry_path = 3;
+    string result_path = 4;
+}
+
+// 单个文件分块
+message TaskFileChunk {
+    bytes data = 1;
+    string path = 2;
+    TaskFileType file_type = 3;
+    bool file_start = 4;
+    bool file_end = 5;
+    int64 file_size = 6;
+}
+
 // 任务请求
 message TaskRequest {
-    bytes task = 1;
-    ReqDeviceType device_type = 2;
-    string ip_address = 3;
-    string path = 4;
-    TaskFileType file_type = 5;
-    bool file_start = 6;
-    bool file_end = 7;
-    int64 file_size = 8;
-    string result_path = 9;
+    oneof payload {
+        TaskConfig config = 1;
+        TaskFileChunk file_chunk = 2;
+    }
 }
 
 // 任务返回结果

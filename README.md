@@ -116,15 +116,15 @@ sudo apt install libcurl4-openssl-dev
      --save_path=tasks/app.bin \
      --extra_files=script:./scripts/setup.sh:tasks/setup.sh,data:./inputs/input.dat:tasks/input.dat \
      --extra_dirs=data:./dataset:tasks/dataset \
-     --result_path=tasks/output.log \
+     --server_result_path=tasks/output.log \
      --device=0
    ```
    - `--extra_files` 使用 `type:本地路径[:服务端路径]` 语法（以逗号分隔多个条目），服务端会校验路径并只允许写在其工作目录中。
    - `--extra_dirs` 使用 `type:本地目录[:服务端目录]` 语法，客户端会递归上传该目录下的所有文件并保留相对路径。
-   - `--result_path` 表示任务完成后需要从服务器返回的文件路径；若省略，则默认回传任务的标准输出。
+   - `--server_result_path` 表示任务完成后需要从服务器返回的文件路径（位于服务器工作目录内）；若省略，则默认回传任务的标准输出。`--result_path` 仍可用但已弃用，仅作兼容别名。
 3. 如需整合资源申请和任务执行，可使用集成客户端：
    ```shell
-   ./build/intergrated_client <controller_host:port> <local_app> <remote_app_path> [device_type] [result_path]
+   ./build/intergrated_client <controller_host:port> <local_app> <remote_app_path> [device_type] [server_result_path]
    ```
 
 

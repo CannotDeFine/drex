@@ -105,7 +105,7 @@ class RemoteServiceClient {
         : stub_(TaskManage::NewStub(channel)) {}
 
     void TaskSubmit(const std::string &local_file, const std::string &save_path,
-                    ReqDeviceType device_type, const std::string &result_path);
+                    ReqDeviceType device_type, const std::string &server_result_path);
 
   private:
     std::unique_ptr<TaskManage::Stub> stub_;
@@ -114,7 +114,7 @@ class RemoteServiceClient {
 void RemoteServiceClient::TaskSubmit(const std::string &local_file,
                                      const std::string &save_path,
                                      ReqDeviceType device_type,
-                                     const std::string &result_path) {
+                                     const std::string &server_result_path) {
     std::ifstream infile(local_file, std::ios::binary);
     if (!infile.is_open()) {
         std::cerr << "Cannot open file: " << local_file << std::endl;
@@ -127,6 +127,22 @@ void RemoteServiceClient::TaskSubmit(const std::string &local_file,
         stub_->TaskSubmission(&context, &response));
 
     std::vector<char> buffer(kChunkSize);
+    TaskRequest config_request;
+    auto *config = config_request.mutable_config();
+    config->set_device_type(device_type);
+    config->set_ip_address("integrated-client");
+    config->set_entry_path(save_path);
+    if (!server_result_path.empty()) {
+        config->set_result_path(server_result_path);
+    }
+
+    if (!writer->Write(config_request)) {
+        std::cerr << "Failed to send task configuration." << std::endl;
+        writer->WritesDone();
+        writer->Finish();
+        return;
+    }
+
     bool first_chunk = true;
     int64_t total_bytes = 0;
 
@@ -148,24 +164,18 @@ void RemoteServiceClient::TaskSubmit(const std::string &local_file,
         }
 
         TaskRequest request;
-        request.set_task(buffer.data(), bytes_read);
-        request.set_path(save_path);
-        request.set_file_type(remote_service::kFileExecutable);
-        request.set_file_start(first_chunk);
+        auto *chunk = request.mutable_file_chunk();
+        chunk->set_data(buffer.data(), bytes_read);
+        chunk->set_path(save_path);
+        chunk->set_file_type(remote_service::kFileExecutable);
+        chunk->set_file_start(first_chunk);
         if (first_chunk && declared_size >= 0) {
-            request.set_file_size(declared_size);
+            chunk->set_file_size(declared_size);
         }
         if (infile.eof()) {
-            request.set_file_end(true);
+            chunk->set_file_end(true);
         }
-        if (first_chunk) {
-            request.set_device_type(device_type);
-            request.set_ip_address("integrated-client");
-            if (!result_path.empty()) {
-                request.set_result_path(result_path);
-            }
-            first_chunk = false;
-        }
+        first_chunk = false;
 
         total_bytes += bytes_read;
         if (!writer->Write(request)) {
@@ -210,7 +220,7 @@ int main(int argc, char **argv) {
     if (argc < 4) {
         std::cerr << "Usage: " << argv[0]
                   << " <controller_addr(host:port)> <local_file> <remote_path> "
-                     "[device_type (0-5)] [result_path]"
+                     "[device_type (0-5)] [server_result_path]"
                   << std::endl;
         return 1;
     }
@@ -222,9 +232,9 @@ int main(int argc, char **argv) {
     if (argc >= 5) {
         device_arg = std::stoi(argv[4]);
     }
-    std::string result_path;
+    std::string server_result_path;
     if (argc >= 6) {
-        result_path = argv[5];
+        server_result_path = argv[5];
     }
 
     try {
@@ -235,7 +245,7 @@ int main(int argc, char **argv) {
         RemoteServiceClient client(
             grpc::CreateChannel(target, grpc::InsecureChannelCredentials()));
         client.TaskSubmit(local_file, remote_path,
-                          static_cast<ReqDeviceType>(device_arg), result_path);
+                          static_cast<ReqDeviceType>(device_arg), server_result_path);
     } catch (const std::exception &ex) {
         std::cerr << ex.what() << std::endl;
         return 1;

@@ -5,7 +5,7 @@
 
 class GpuExecutor : public TaskExecutor {
   public:
-    explicit GpuExecutor(const TaskRequest &request) : TaskExecutor(request) {}
+    explicit GpuExecutor(const TaskConfig &config) : TaskExecutor(config) {}
     ~GpuExecutor() override = default;
 
     grpc::Status Execute(TaskResult *result) override;
