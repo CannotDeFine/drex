@@ -1,7 +1,7 @@
 # 算力设备的远程过程调用
 
 ## 一、构建
-1 依赖安装
+编译安装protobuf
 ```shell
 # protobuf 3.25.7 安装
 # 这里的absl可以用下面gRPC的使用的版本，将它安装到系统
@@ -17,7 +17,7 @@ cmake .. \
 make -j$(nproc)
 sudo make install
 ```
-2 编译安装gRPC
+编译安装gRPC
 ```shell
 git clone -b v1.74.0 --depth 1 https://github.com/grpc/grpc
 cd grpc
@@ -79,7 +79,7 @@ make -j $(nproc)
 sudo make install
 popd
 ```
-3 编译bRPC
+编译安装bRPC
 ```shell
 mkdir build
 cd build
@@ -93,12 +93,8 @@ cmake .. \
 make -j$(nproc)
 sudo make install
 ```
-4 安装第三方库
-```shell
-# curl install
-sudo apt install libcurl4-openssl-dev
-```
-5 编译项目
+
+编译项目
 ```shell
 ./compile.sh
 ```
@@ -114,7 +110,6 @@ sudo apt install libcurl4-openssl-dev
 ├── proto           # proto file
 ├── README.md
 ├── server          # the implement of the function
-├── third_party     # third party tools
 └── tools
 ````
 
