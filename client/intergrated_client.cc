@@ -32,7 +32,8 @@ std::string Uint32ToIp(uint32_t ip_uint32) {
     return oss.str();
 }
 
-NodeInfo ApplyResourceAndGetNode(const std::string &controller_addr) {
+NodeInfo ApplyResourceAndGetNode(const std::string &controller_addr, const std::string &resource_type,
+                                 int resource_count) {
     brpc::Channel channel;
     brpc::ChannelOptions options;
     options.protocol = "baidu_std";
@@ -48,8 +49,8 @@ NodeInfo ApplyResourceAndGetNode(const std::string &controller_addr) {
     hcp::ApplyResourceRequest apply_request;
     hcp::ApplyResourceResponse apply_response;
     brpc::Controller apply_cntl;
-    apply_request.set_type("CPU");
-    apply_request.set_nums(1);
+    apply_request.set_type(resource_type);
+    apply_request.set_nums(resource_count);
     stub.apply_resource(&apply_cntl, &apply_request, &apply_response, nullptr);
 
     if (apply_cntl.Failed() || apply_response.status().errcode() != 0) {
@@ -127,9 +128,10 @@ int ExecuteTask(const std::string &target, const std::vector<UploadFileSpec> &fi
 } // namespace
 
 int main(int argc, char **argv) {
-    if (argc < 6) {
+    if (argc < 8) {
         std::cerr << "Usage: " << argv[0]
-                  << " <controller_addr(host:port)> <src_dir> <workspace_subdir> <command> <local_output_dir>" << std::endl;
+                  << " <controller_addr(host:port)> <src_dir> <workspace_subdir> <command> <local_output_dir> <resource_type> <resource_count>"
+                  << std::endl;
         return 1;
     }
 
@@ -138,9 +140,28 @@ int main(int argc, char **argv) {
     const std::string workspace_subdir = argv[3];
     const std::string command = argv[4];
     const std::string local_output_dir = argv[5];
+    const std::string resource_type = argv[6];
+
+    int resource_count = 0;
+    try {
+        resource_count = std::stoi(argv[7]);
+    } catch (const std::exception &ex) {
+        std::cerr << "Invalid resource_count: " << ex.what() << std::endl;
+        return 1;
+    }
 
     if (command.empty()) {
         std::cerr << "Command must not be empty." << std::endl;
+        return 1;
+    }
+
+    if (resource_type.empty()) {
+        std::cerr << "Resource type must not be empty." << std::endl;
+        return 1;
+    }
+
+    if (resource_count <= 0) {
+        std::cerr << "Resource count must be positive." << std::endl;
         return 1;
     }
 
@@ -156,7 +177,7 @@ int main(int argc, char **argv) {
     }
 
     try {
-        NodeInfo node = ApplyResourceAndGetNode(controller_addr);
+        NodeInfo node = ApplyResourceAndGetNode(controller_addr, resource_type, resource_count);
         const std::string target = node.ip + ":" + std::to_string(static_cast<int>(node.port));
         return ExecuteTask(target, files, workspace_subdir, command, local_output_dir);
     } catch (const std::exception &ex) {

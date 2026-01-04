@@ -81,6 +81,9 @@ popd
 ```
 编译安装bRPC
 ```shell
+git clone -b 1.14.1 --depth 1 https://github.com/apache/brpc.git
+sudo apt install -y libleveldb-dev
+sudo apt install -y libgflags-dev
 mkdir build
 cd build
 cmake .. \

@@ -3,8 +3,12 @@
 #include <brpc/channel.h>
 #include <butil/logging.h>
 
+#include <arpa/inet.h>
+
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
+#include <string>
 
 // Converts a uint32 IP value to dotted decimal string.
 std::string Uint32ToIP(uint32_t ip_uint32) {
@@ -15,14 +19,63 @@ std::string Uint32ToIP(uint32_t ip_uint32) {
     return oss.str();
 }
 
-int main() {
+int main(int argc, char **argv) {
+    if (argc < 4) {
+        std::cerr << "Usage: " << argv[0]
+                  << " --controller=<host:port> --type=<resource_type> --count=<resource_count>" << std::endl;
+        return -1;
+    }
+
+    std::string controller_addr;
+    std::string resource_type;
+    int resource_count = 0;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg(argv[i]);
+        const std::string controller_prefix = "--controller=";
+        const std::string type_prefix = "--type=";
+        const std::string count_prefix = "--count=";
+
+        if (arg.rfind(controller_prefix, 0) == 0) {
+            controller_addr = arg.substr(controller_prefix.size());
+        } else if (arg.rfind(type_prefix, 0) == 0) {
+            resource_type = arg.substr(type_prefix.size());
+        } else if (arg.rfind(count_prefix, 0) == 0) {
+            const std::string value = arg.substr(count_prefix.size());
+            try {
+                resource_count = std::stoi(value);
+            } catch (const std::exception &ex) {
+                LOG(ERROR) << "Invalid --count value: " << ex.what();
+                return -1;
+            }
+        } else {
+            LOG(ERROR) << "Unknown argument: " << arg;
+            return -1;
+        }
+    }
+
+    if (controller_addr.empty()) {
+        LOG(ERROR) << "--controller must be provided.";
+        return -1;
+    }
+
+    if (resource_type.empty()) {
+        LOG(ERROR) << "--type must be provided.";
+        return -1;
+    }
+
+    if (resource_count <= 0) {
+        LOG(ERROR) << "--count must be a positive integer.";
+        return -1;
+    }
+
     brpc::Channel channel;
     brpc::ChannelOptions options;
     options.protocol = "baidu_std";
     options.timeout_ms = 5000;
     options.max_retry = 3;
 
-    if (channel.Init("10.26.42.231:8000", "", &options) != 0) {
+    if (channel.Init(controller_addr.c_str(), "", &options) != 0) {
         LOG(ERROR) << "Init Channel Failed";
         return -1;
     }
@@ -33,8 +86,8 @@ int main() {
     hcp::ApplyResourceRequest apply_req;
     hcp::ApplyResourceResponse apply_res;
     brpc::Controller cntl1;
-    apply_req.set_type("CPU");
-    apply_req.set_nums(1);
+    apply_req.set_type(resource_type);
+    apply_req.set_nums(resource_count);
     stub.apply_resource(&cntl1, &apply_req, &apply_res, nullptr);
 
     if (cntl1.Failed() || apply_res.status().errcode() != 0) {
