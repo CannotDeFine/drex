@@ -59,6 +59,7 @@ sudo make install
 popd
 
 # Install gRPC, we must install by package.
+sudo apt install -y openssl libssl-dev
 mkdir -p "cmake/build"
 pushd "cmake/build"
 cmake \
