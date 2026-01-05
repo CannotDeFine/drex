@@ -250,6 +250,7 @@ doca_error_t kernel_launch(struct dpa_resources *resources)
 	}
 	worker_started = true;
 
+	// Kernel launch loop
 	for (uint32_t task_id = 0; task_id < m_tasks; task_id++) {
 		if (g_stop_requested)
 			break;
@@ -280,6 +281,7 @@ doca_error_t kernel_launch(struct dpa_resources *resources)
 		uint64_t wait_thresh = 4;
 		uint64_t comp_event_val = 10 + (uint64_t)task_id;
 
+		// Kernel launch
 		result = doca_dpa_kernel_launch_update_set(resources->doca_dpa,
 			   wait_event,
 			   wait_thresh,

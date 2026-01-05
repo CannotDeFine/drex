@@ -39,4 +39,5 @@ export XSCHED_AUTO_XQUEUE_UTILIZATION=20
 export DPA_DEMO_PRINT_ELAPSED_MS=1
 export DPA_DEMO_HEARTBEAT_MS=200
 
+chmod +x "${SCRIPT_DIR}/run_demo_xsched_preload.sh"
 "${SCRIPT_DIR}/run_demo_xsched_preload.sh"

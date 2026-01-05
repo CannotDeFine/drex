@@ -47,4 +47,5 @@ export DPA_DEMO_GATE_DRAIN="${DPA_DEMO_GATE_DRAIN:-1}"
 export DPA_DEMO_GATE_VERBOSE="${DPA_DEMO_GATE_VERBOSE:-0}"
 export DPA_DEMO_GATE_LOG_MS="${DPA_DEMO_GATE_LOG_MS:-0}"
 
+chmod +x "${SCRIPT_DIR}/run_demo_xsched_preload.sh"
 "${SCRIPT_DIR}/run_demo_xsched_preload.sh"

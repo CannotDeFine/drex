@@ -2,6 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/dpa_kernel_launch"
+chmod +x ./build_output.sh
 ./build_output.sh >/dev/null
 
 XSCHED_BUILD_DIR="${XSCHED_BUILD_DIR:-/home/cdf/xsched/build}"
