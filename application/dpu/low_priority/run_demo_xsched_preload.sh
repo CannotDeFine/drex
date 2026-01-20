@@ -33,7 +33,8 @@ export XSCHED_AUTO_XQUEUE_UTILIZATION="${XSCHED_AUTO_XQUEUE_UTILIZATION:-20}"
 export DPA_DEMO_PRINT_ELAPSED_MS="${DPA_DEMO_PRINT_ELAPSED_MS:-1}"
 
 # Heartbeat makes preemption obvious even when completions pause.
-export DPA_DEMO_HEARTBEAT_MS="${DPA_DEMO_HEARTBEAT_MS:-200}"
+export DPA_DEMO_HEARTBEAT_MS="${DPA_DEMO_HEARTBEAT_MS:-0}"
+export DPA_DEMO_STDOUT_FLUSH_MS="${DPA_DEMO_STDOUT_FLUSH_MS:-200}"
 
 # Keep the actual task workload consistent between low/high.
 export DPA_DEMO_KERNEL_ITERS="${DPA_DEMO_KERNEL_ITERS:-20000}"
@@ -50,6 +51,12 @@ export DPA_DEMO_GATE_IDLE_MS="${DPA_DEMO_GATE_IDLE_MS:-1000}"
 export DPA_DEMO_GATE_DRAIN="${DPA_DEMO_GATE_DRAIN:-1}"
 export DPA_DEMO_GATE_VERBOSE="${DPA_DEMO_GATE_VERBOSE:-0}"
 export DPA_DEMO_GATE_LOG_MS="${DPA_DEMO_GATE_LOG_MS:-0}"
+
+# Optional: wrap in a local PTY (useful when running this script directly).
+# When using remote_client, prefer its --pty flag instead of forcing PTY here.
+if [[ "${DPA_DEMO_USE_SCRIPT_PTY:-0}" != "0" ]] && command -v script >/dev/null 2>&1; then
+	exec script -q -e -c "./output/doca_dpa_kernel_launch" /dev/null
+fi
 
 exec ./output/doca_dpa_kernel_launch
 

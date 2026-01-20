@@ -18,7 +18,8 @@ class RemoteServiceImplement final : public remote_service::TaskManage::Service 
     ~RemoteServiceImplement() override = default;
 
   private:
-    grpc::Status DownloadWorkspace(grpc::ServerReaderWriter<remote_service::TaskResponse, remote_service::TaskRequest> *stream,
+    grpc::Status DownloadWorkspace(grpc::ServerContext *context,
+                                   grpc::ServerReaderWriter<remote_service::TaskResponse, remote_service::TaskRequest> *stream,
                                    const std::filesystem::path &workspace_root, remote_service::TaskConfig *config_out,
                                    WorkspaceLockGuard *lock_guard);
 };

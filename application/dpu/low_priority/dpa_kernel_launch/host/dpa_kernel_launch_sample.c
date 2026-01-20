@@ -157,6 +157,44 @@ struct completion_worker_ctx {
 	pthread_cond_t cond;
 };
 
+struct heartbeat_ctx {
+	struct completion_worker_ctx *worker;
+	uint32_t total_tasks;
+	uint32_t interval_ms;
+	bool emit_heartbeat;
+};
+
+static void *heartbeat_worker(void *arg)
+{
+	struct heartbeat_ctx *hb = (struct heartbeat_ctx *)arg;
+	uint64_t last_print_ns = 0;
+	(void)last_print_ns;
+	while (!g_stop_requested) {
+		usleep((useconds_t)hb->interval_ms * 1000);
+		if (g_stop_requested)
+			break;
+		pthread_mutex_lock(&hb->worker->mutex);
+		uint32_t completed = hb->worker->completed;
+		uint32_t ready = hb->worker->next_ready;
+		uint32_t inflight = (ready >= completed) ? (ready - completed) : 0;
+		bool accepting = hb->worker->accepting;
+		pthread_mutex_unlock(&hb->worker->mutex);
+
+		fflush(stdout);
+		if (hb->emit_heartbeat) {
+			fprintf(stderr, "[heartbeat] completed=%u/%u inflight=%u accepting=%d\n",
+				completed,
+				hb->total_tasks,
+				inflight,
+				accepting ? 1 : 0);
+			fflush(stderr);
+		}
+		if (completed >= hb->total_tasks && !accepting)
+			break;
+	}
+	return NULL;
+}
+
 static void *completion_worker(void *arg)
 {
 	struct completion_worker_ctx *ctx = (struct completion_worker_ctx *)arg;
@@ -241,6 +279,8 @@ doca_error_t kernel_launch(struct dpa_resources *resources)
 	const uint32_t verbose = k_verbose;
 	const unsigned int num_dpa_threads = 1;
 	doca_error_t result = DOCA_SUCCESS;
+	const uint32_t heartbeat_ms = getenv_u32_or_default("DPA_DEMO_HEARTBEAT_MS", 0);
+	const uint32_t stdout_flush_ms = getenv_u32_or_default("DPA_DEMO_STDOUT_FLUSH_MS", 0);
 
 	if (max_inflight == 0)
 		max_inflight = 1;
@@ -311,6 +351,20 @@ doca_error_t kernel_launch(struct dpa_resources *resources)
 		goto cleanup;
 	}
 	worker_started = true;
+
+	bool heartbeat_started = false;
+	pthread_t heartbeat_thread;
+	struct heartbeat_ctx hb_ctx;
+	const uint32_t tick_ms = (stdout_flush_ms != 0) ? stdout_flush_ms : heartbeat_ms;
+	if (tick_ms != 0) {
+		hb_ctx.worker = &worker_ctx;
+		hb_ctx.total_tasks = m_tasks;
+		hb_ctx.interval_ms = tick_ms;
+		hb_ctx.emit_heartbeat = (heartbeat_ms != 0);
+		if (pthread_create(&heartbeat_thread, NULL, heartbeat_worker, &hb_ctx) == 0) {
+			heartbeat_started = true;
+		}
+	}
 
 	uint32_t gate_in_batch = 0;
 	uint64_t gate_wait_val = 4;
@@ -485,6 +539,8 @@ cleanup:
 	}
 	if (worker_started)
 		(void)pthread_join(worker_thread, NULL);
+	if (heartbeat_started)
+		(void)pthread_join(heartbeat_thread, NULL);
 	if (worker_sync_ready) {
 		pthread_cond_destroy(&worker_ctx.cond);
 		pthread_mutex_destroy(&worker_ctx.mutex);

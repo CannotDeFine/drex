@@ -15,6 +15,7 @@ ABSL_FLAG(std::string, target, "127.0.0.1:8063", "Server address.");
 ABSL_FLAG(std::string, src_dir, "./task", "Local directory to upload to the server.");
 ABSL_FLAG(std::string, workspace_subdir, "uploaded_task", "Subdirectory under the server workspace for the uploaded folder.");
 ABSL_FLAG(std::string, command, "", "Command to execute inside the uploaded workspace directory.");
+ABSL_FLAG(bool, pty, false, "Run the remote command under a PTY (improves interactivity for buffered stdout). May slow very chatty output.");
 
 namespace fs = std::filesystem;
 
@@ -82,10 +83,10 @@ bool ExtractArchiveTo(const std::string &archive_data, const fs::path &destinati
 }
 
 int RunClientWorkflow(const std::vector<UploadFileSpec> &files, const UploadStats &stats, const std::string &target_str,
-                      const std::string &workspace_subdir, const std::string &command, const std::string &restore_dir) {
+                      const std::string &workspace_subdir, const std::string &command, const std::string &restore_dir, bool enable_pty) {
     RemoteServiceClient client(grpc::CreateChannel(target_str, grpc::InsecureChannelCredentials()));
     RemoteServiceClient::TaskSubmitReport report;
-    grpc::Status status = client.TaskSubmit(files, workspace_subdir, command, &report, &stats);
+    grpc::Status status = client.TaskSubmit(files, workspace_subdir, command, &report, &stats, enable_pty);
     if (!status.ok()) {
         PrintStageFailure(2, "RPC failed during upload/execution: " + status.error_message());
         return 1;
@@ -99,6 +100,13 @@ int RunClientWorkflow(const std::vector<UploadFileSpec> &files, const UploadStat
     fs::path restore_path = restore_dir.empty() ? fs::path(".") : fs::path(restore_dir);
     std::cout << "[4/4] Restoring outputs to: " << restore_path << std::endl;
     const std::string &archive = report.response.output_archive();
+    if (archive.empty()) {
+        std::cout << "\nExecution success." << std::endl;
+        std::cout << "Exit code: 0" << std::endl;
+        std::cout << "Total time: " << FormatSeconds(report.elapsed_seconds) << " s" << std::endl;
+        std::cout << "Note: server did not return an output archive." << std::endl;
+        return 0;
+    }
     if (!ExtractArchiveTo(archive, restore_path)) {
         PrintStageFailure(4, "Failed to extract outputs to " + restore_path.string());
         return 1;
@@ -119,6 +127,7 @@ int main(int argc, char **argv) {
     const std::string src_dir = absl::GetFlag(FLAGS_src_dir);
     const std::string workspace_subdir = absl::GetFlag(FLAGS_workspace_subdir);
     const std::string command = absl::GetFlag(FLAGS_command);
+    const bool enable_pty = absl::GetFlag(FLAGS_pty);
 
     if (src_dir.empty()) {
         std::cerr << "Use --src_dir to select a directory to upload." << std::endl;
@@ -152,5 +161,5 @@ int main(int argc, char **argv) {
     std::cout << "    -> Found " << stats.file_count << " files, total " << FormatBytes(stats.total_bytes) << std::endl;
     std::cout << "[2/4] Uploading workspace (" << stats.file_count << " files, " << FormatBytes(stats.total_bytes) << ")..." << std::endl;
 
-    return RunClientWorkflow(files, stats, target_str, workspace_subdir, command, src_dir);
+    return RunClientWorkflow(files, stats, target_str, workspace_subdir, command, src_dir, enable_pty);
 }

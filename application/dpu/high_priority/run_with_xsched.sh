@@ -37,7 +37,8 @@ export XSCHED_AUTO_XQUEUE_UTILIZATION=20
 
 # Keep this queue busy but preemptible so xcli can show RDY/BLK flips.
 export DPA_DEMO_PRINT_ELAPSED_MS=1
-export DPA_DEMO_HEARTBEAT_MS=200
+export DPA_DEMO_HEARTBEAT_MS="${DPA_DEMO_HEARTBEAT_MS:-0}"
+export DPA_DEMO_STDOUT_FLUSH_MS="${DPA_DEMO_STDOUT_FLUSH_MS:-200}"
 
 chmod +x "${SCRIPT_DIR}/run_demo_xsched_preload.sh"
 "${SCRIPT_DIR}/run_demo_xsched_preload.sh"

@@ -83,11 +83,12 @@ Flags (from source):
 - `--src_dir` (default: `./task`): local directory to upload (must contain at least one file)
 - `--workspace_subdir` (default: `uploaded_task`): subdirectory under server workspace
 - `--command` (required): command executed on the server *inside* the uploaded workspace directory
+- `--pty` (default: `false`): run the remote command under a PTY (helps when stdout is buffered; may slow very chatty output)
 
 Outputs:
 
-- The server always archives `<workspace_subdir>/output/` and returns it as a `tar.gz`.
-- `remote_client` extracts that archive locally using `tar` into `--src_dir` (so your local workspace will receive an `output/` directory).
+- By default, the server can archive `<workspace_subdir>/output/` and return it as a `tar.gz`.
+- Some deployments disable output archiving and only stream terminal logs; in that mode, clients will report success without restoring an `output/` directory.
 
 ### 3) Query/apply resources with `resource_client`
 
@@ -104,7 +105,9 @@ It prints the returned nodes as `IP` and `Port`.
 
 ### 4) Apply resources and submit a task with `intergrated_client`
 
-`intergrated_client` uses **positional arguments**:
+`intergrated_client` supports **positional arguments** (legacy) or a **--key=value** style.
+
+Positional arguments:
 
 ```bash
 ./build/intergrated_client \
@@ -114,7 +117,20 @@ It prints the returned nodes as `IP` and `Port`.
   <command> \
   <local_output_dir> \
   <resource_type> \
-  <resource_count>
+  <resource_count> \
+  [--mem=<mem_req>] [--cores=<core_req>] [--pty]
+```
+
+Flags style (defaults: `--count=1`, `--local_output_dir=.`):
+
+```bash
+./build/intergrated_client \
+  --controller=<host:port> \
+  --src_dir=<dir> \
+  --workspace_subdir=<name> \
+  --command=<cmd> \
+  --type=<resource_type> \
+  [--count=<n>] [--local_output_dir=<dir>] [--mem=<mem_req>] [--cores=<core_req>] [--pty]
 ```
 
 Example:
@@ -133,7 +149,8 @@ Example:
 Output behavior:
 
 - `intergrated_client` saves the server archive as `server_output.tar.gz` under `<local_output_dir>`.
-- It does **not** extract the archive automatically.
+- It also extracts that archive locally using `tar` into `<local_output_dir>`.
+  - If the server does not return an output archive, it will only stream terminal output and exit successfully.
 
 ## Protocols
 

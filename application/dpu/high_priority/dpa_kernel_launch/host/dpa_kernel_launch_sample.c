@@ -56,7 +56,7 @@ static void restore_stop_signal_handlers(const struct signal_guard *guard)
 extern doca_dpa_func_t hello_world;
 
 /* Initial simple knobs: fixed workload & per-task timing prints. */
-static const uint32_t k_m_tasks = 200000;
+static const uint32_t k_m_tasks = 20;
 static const uint32_t k_n_iters_in_kernel = 3000000;
 static const uint32_t k_sleep_min_ms = 30;
 static const uint32_t k_sleep_max_ms = 50;
@@ -124,6 +124,46 @@ struct completion_worker_ctx {
 	pthread_mutex_t mutex;
 	pthread_cond_t cond;
 };
+
+struct heartbeat_ctx {
+	struct completion_worker_ctx *worker;
+	uint32_t total_tasks;
+	uint32_t interval_ms;
+	bool emit_heartbeat;
+};
+
+static void *heartbeat_worker(void *arg)
+{
+	struct heartbeat_ctx *hb = (struct heartbeat_ctx *)arg;
+	while (!g_stop_requested) {
+		usleep((useconds_t)hb->interval_ms * 1000);
+		if (g_stop_requested)
+			break;
+		pthread_mutex_lock(&hb->worker->mutex);
+		uint32_t completed = hb->worker->completed;
+		uint32_t ready = hb->worker->next_ready;
+		uint32_t inflight = (ready >= completed) ? (ready - completed) : 0;
+		bool accepting = hb->worker->accepting;
+		pthread_mutex_unlock(&hb->worker->mutex);
+
+		// Flush stdout periodically so buffered completion prints don't sit in stdio buffers.
+		fflush(stdout);
+
+		if (hb->emit_heartbeat) {
+			// stderr is typically unbuffered; use it for timely progress.
+			fprintf(stderr, "[heartbeat] completed=%u/%u inflight=%u accepting=%d\n",
+				completed,
+				hb->total_tasks,
+				inflight,
+				accepting ? 1 : 0);
+			fflush(stderr);
+		}
+
+		if (completed >= hb->total_tasks && !accepting)
+			break;
+	}
+	return NULL;
+}
 
 static void *completion_worker(void *arg)
 {
@@ -194,6 +234,8 @@ doca_error_t kernel_launch(struct dpa_resources *resources)
 	const unsigned int num_dpa_threads = 1;
 	doca_error_t result = DOCA_SUCCESS;
 	uint32_t tasks_completed = 0;
+	const uint32_t heartbeat_ms = getenv_u32_or_default("DPA_DEMO_HEARTBEAT_MS", 0);
+	const uint32_t stdout_flush_ms = getenv_u32_or_default("DPA_DEMO_STDOUT_FLUSH_MS", 0);
 
 	if (max_inflight == 0)
 		max_inflight = 1;
@@ -249,6 +291,20 @@ doca_error_t kernel_launch(struct dpa_resources *resources)
 		goto cleanup;
 	}
 	worker_started = true;
+
+	bool heartbeat_started = false;
+	pthread_t heartbeat_thread;
+	struct heartbeat_ctx hb_ctx;
+	const uint32_t tick_ms = (stdout_flush_ms != 0) ? stdout_flush_ms : heartbeat_ms;
+	if (tick_ms != 0) {
+		hb_ctx.worker = &worker_ctx;
+		hb_ctx.total_tasks = m_tasks;
+		hb_ctx.interval_ms = tick_ms;
+		hb_ctx.emit_heartbeat = (heartbeat_ms != 0);
+		if (pthread_create(&heartbeat_thread, NULL, heartbeat_worker, &hb_ctx) == 0) {
+			heartbeat_started = true;
+		}
+	}
 
 	// Kernel launch loop
 	for (uint32_t task_id = 0; task_id < m_tasks; task_id++) {
@@ -326,6 +382,8 @@ cleanup:
 	}
 	if (worker_started)
 		(void)pthread_join(worker_thread, NULL);
+	if (heartbeat_started)
+		(void)pthread_join(heartbeat_thread, NULL);
 	if (worker_sync_ready) {
 		pthread_cond_destroy(&worker_ctx.cond);
 		pthread_mutex_destroy(&worker_ctx.mutex);

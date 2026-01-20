@@ -142,7 +142,8 @@ void WorkspaceLockGuard::Cleanup() {
     cleanup_registered_ = false;
 }
 
-grpc::Status RemoteServiceImplement::TaskSubmission(grpc::ServerContext * /*context*/, grpc::ServerReaderWriter<TaskResponse, TaskRequest> *stream) {
+grpc::Status RemoteServiceImplement::TaskSubmission(grpc::ServerContext *context,
+                                                    grpc::ServerReaderWriter<TaskResponse, TaskRequest> *stream) {
     std::error_code ec;
     fs::path workspace_root = fs::weakly_canonical(kWorkspaceRoot, ec);
     if (ec) {
@@ -152,16 +153,22 @@ grpc::Status RemoteServiceImplement::TaskSubmission(grpc::ServerContext * /*cont
 
     WorkspaceLockGuard workspace_guard(workspace_root);
     TaskConfig config;
-    grpc::Status download_status = DownloadWorkspace(stream, workspace_root, &config, &workspace_guard);
+    grpc::Status download_status = DownloadWorkspace(context, stream, workspace_root, &config, &workspace_guard);
     if (!download_status.ok()) {
+        if (download_status.error_code() == grpc::StatusCode::CANCELLED) {
+            return download_status;
+        }
         SendFailure(stream, download_status.error_message());
         return download_status;
     }
 
-    TaskExecutor executor(config, workspace_root, stream);
+    TaskExecutor executor(context, config, workspace_root, stream);
     TaskResult result;
     grpc::Status exec_status = executor.Execute(&result);
     if (!exec_status.ok()) {
+        if (exec_status.error_code() == grpc::StatusCode::CANCELLED) {
+            return exec_status;
+        }
         SendFailure(stream, exec_status.error_message());
         return exec_status;
     }
@@ -170,7 +177,8 @@ grpc::Status RemoteServiceImplement::TaskSubmission(grpc::ServerContext * /*cont
     return grpc::Status::OK;
 }
 
-grpc::Status RemoteServiceImplement::DownloadWorkspace(grpc::ServerReaderWriter<TaskResponse, TaskRequest> *stream,
+grpc::Status RemoteServiceImplement::DownloadWorkspace(grpc::ServerContext *context,
+                                                       grpc::ServerReaderWriter<TaskResponse, TaskRequest> *stream,
                                                        const fs::path &workspace_root, TaskConfig *config_out, WorkspaceLockGuard *lock_guard) {
     TaskRequest incoming;
     std::ofstream outfile;
@@ -182,6 +190,9 @@ grpc::Status RemoteServiceImplement::DownloadWorkspace(grpc::ServerReaderWriter<
     auto set_failure = [&](const grpc::Status &status) { return status; };
 
     while (stream->Read(&incoming)) {
+        if (context != nullptr && context->IsCancelled()) {
+            return set_failure(grpc::Status(grpc::StatusCode::CANCELLED, "Client cancelled request."));
+        }
         if (incoming.has_config()) {
             if (received_config) {
                 return set_failure(grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Duplicate TaskConfig payload!"));
@@ -257,6 +268,10 @@ grpc::Status RemoteServiceImplement::DownloadWorkspace(grpc::ServerReaderWriter<
             outfile.close();
             current_file_path.clear();
         }
+    }
+
+    if (context != nullptr && context->IsCancelled()) {
+        return set_failure(grpc::Status(grpc::StatusCode::CANCELLED, "Client cancelled request."));
     }
 
     if (!received_config) {

@@ -9,7 +9,7 @@ message Status {
 
 message ApplyResourceRequest {
     optional string type = 1;  
-	optional int32 nums = 2;
+	optional int32 nums = 2; // TODO (预留接口能申请多块)
 	optional int32 memreq = 3;
     optional int32 corereq = 4;
 }
@@ -24,7 +24,7 @@ message QueryResourceRequest {
 }
 
 message NodeId {
-    required uint32 ip = 1;
+    required string ip = 1;
     required int32 port = 2;
 }
 

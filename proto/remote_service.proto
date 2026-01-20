@@ -11,6 +11,7 @@ message TaskConfig {
     string workspace_subdir = 1;
     string command = 2;
     string output_subdir = 3;
+    bool enable_pty = 4;
 }
 
 message TaskFileChunk {

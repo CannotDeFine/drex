@@ -5,7 +5,7 @@ set(CMAKE_PREFIX_PATH "/usr/local")
 
 # Dependencies
 # system_libaries
-find_package(CURL REQUIRED)
+# find_package(CURL REQUIRED)
 find_package(gRPC REQUIRED)
 find_package(Protobuf REQUIRED)
 find_package(Threads REQUIRED)
@@ -132,6 +132,7 @@ target_link_libraries(remote_server
     remote_grpc_proto
     
     ${ABSL_LIBRARIES}
+    util
 )
 
 # client

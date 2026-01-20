@@ -32,12 +32,19 @@ export XSCHED_AUTO_XQUEUE_BATCH_SIZE="${XSCHED_AUTO_XQUEUE_BATCH_SIZE:-32}"
 export DPA_DEMO_PRINT_ELAPSED_MS="${DPA_DEMO_PRINT_ELAPSED_MS:-1}"
 
 # Heartbeat makes preemption obvious even when completions pause.
-export DPA_DEMO_HEARTBEAT_MS="${DPA_DEMO_HEARTBEAT_MS:-200}"
+export DPA_DEMO_HEARTBEAT_MS="${DPA_DEMO_HEARTBEAT_MS:-0}"
+export DPA_DEMO_STDOUT_FLUSH_MS="${DPA_DEMO_STDOUT_FLUSH_MS:-200}"
 
-# Keep the actual task workload consistent between low/high.
-export DPA_DEMO_KERNEL_ITERS="${DPA_DEMO_KERNEL_ITERS:-20000}"
-export DPA_DEMO_MAX_INFLIGHT="${DPA_DEMO_MAX_INFLIGHT:-128}"
-export DPA_DEMO_INTER_TASK_SLEEP_MS="${DPA_DEMO_INTER_TASK_SLEEP_MS:-0}"
-export DPA_DEMO_RUNTIME_MS="${DPA_DEMO_RUNTIME_MS:-0}"
+# NOTE:
+# The high-priority binary defaults to DPA_DEMO_ITERS=3000000 and DPA_DEMO_INFLIGHT=1.
+# Forcing inflight > 1 will make "Task N completed in X ms" look increasing because X
+# includes queueing time from submission to completion.
+# Keep defaults unless you explicitly export DPA_DEMO_ITERS / DPA_DEMO_INFLIGHT.
+
+# Optional: wrap in a local PTY (useful when running this script directly).
+# When using remote_client, prefer its --pty flag instead of forcing PTY here.
+if [[ "${DPA_DEMO_USE_SCRIPT_PTY:-0}" != "0" ]] && command -v script >/dev/null 2>&1; then
+	exec script -q -e -c "./output/doca_dpa_kernel_launch" /dev/null
+fi
 
 exec ./output/doca_dpa_kernel_launch

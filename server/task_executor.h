@@ -10,7 +10,7 @@
 
 class TaskExecutor {
   public:
-    TaskExecutor(const remote_service::TaskConfig &config, const std::filesystem::path &workspace_root,
+    TaskExecutor(grpc::ServerContext *context, const remote_service::TaskConfig &config, const std::filesystem::path &workspace_root,
                  grpc::ServerReaderWriter<remote_service::TaskResponse, remote_service::TaskRequest> *stream);
 
     grpc::Status Execute(remote_service::TaskResult *result) const;
@@ -21,6 +21,7 @@ class TaskExecutor {
     grpc::Status CreateOutputArchive(const std::filesystem::path &output_dir, std::string *archive_data) const;
     void EmitLogChunk(const std::string &chunk) const;
 
+    grpc::ServerContext *context_ = nullptr;
     remote_service::TaskConfig config_;
     std::filesystem::path workspace_root_;
     grpc::ServerReaderWriter<remote_service::TaskResponse, remote_service::TaskRequest> *stream_;

@@ -6,6 +6,12 @@
 #include <iostream>
 #include <sstream>
 
+#include <atomic>
+#include <chrono>
+#include <thread>
+
+#include <unistd.h>
+
 #include <sys/time.h>
 
 namespace {
@@ -105,7 +111,7 @@ grpc::Status ValidateUploadFiles(const std::vector<UploadFileSpec> &files) {
 RemoteServiceClient::RemoteServiceClient(std::shared_ptr<grpc::Channel> channel) : stub_(remote_service::TaskManage::NewStub(channel)) {}
 
 grpc::Status RemoteServiceClient::TaskSubmit(const std::vector<UploadFileSpec> &files, const std::string &workspace_subdir, const std::string &command,
-                                             TaskSubmitReport *report, const UploadStats *upload_stats) {
+                                             TaskSubmitReport *report, const UploadStats *upload_stats, bool enable_pty) {
     if (files.empty()) {
         return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "No files specified for upload.");
     }
@@ -130,6 +136,7 @@ grpc::Status RemoteServiceClient::TaskSubmit(const std::vector<UploadFileSpec> &
     config->set_workspace_subdir(workspace_subdir);
     config->set_command(command);
     config->set_output_subdir(effective_output_subdir);
+    config->set_enable_pty(enable_pty);
 
     if (!stream->Write(config_request)) {
         stream->WritesDone();
@@ -217,22 +224,91 @@ grpc::Status RemoteServiceClient::TaskSubmit(const std::vector<UploadFileSpec> &
     remote_service::TaskResult final_result;
     remote_service::TaskResponse response;
     bool log_line_start = true;
+
+    // Local-only idle indicator: helps when the remote process is preempted or quiet.
+    // Printed to stderr, single-line, no extra remote logs.
+    const bool enable_idle_indicator = enable_progress && ::isatty(fileno(stderr));
+    std::atomic<bool> stop_idle{false};
+    std::atomic<int64_t> last_log_us{0};
+    auto now_us = []() -> int64_t {
+        using clock = std::chrono::steady_clock;
+        return std::chrono::duration_cast<std::chrono::microseconds>(clock::now().time_since_epoch()).count();
+    };
+    last_log_us.store(now_us(), std::memory_order_relaxed);
+    std::atomic<bool> idle_line_visible{false};
+
+    auto clear_idle_line = [&]() {
+        if (!enable_idle_indicator) {
+            return;
+        }
+        if (!idle_line_visible.exchange(false)) {
+            return;
+        }
+        // Clear the current stderr line without ANSI.
+        std::cerr << '\r' << std::string(96, ' ') << '\r';
+        std::cerr.flush();
+    };
+
+    std::thread idle_thread;
+    if (enable_idle_indicator) {
+        idle_thread = std::thread([&]() {
+            int64_t last_print_sec = -1;
+            while (!stop_idle.load(std::memory_order_relaxed)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                if (stop_idle.load(std::memory_order_relaxed)) {
+                    break;
+                }
+
+                const int64_t idle_us = now_us() - last_log_us.load(std::memory_order_relaxed);
+                if (idle_us < 1200 * 1000) {
+                    continue;
+                }
+                const int64_t idle_sec = idle_us / 1'000'000;
+                if (idle_sec == last_print_sec) {
+                    continue;
+                }
+                last_print_sec = idle_sec;
+                idle_line_visible.store(true, std::memory_order_relaxed);
+                std::cerr << "\r    [client] waiting for remote output... (idle " << idle_sec << "s)";
+                std::cerr.flush();
+            }
+        });
+    }
+
     auto print_log = [&](const std::string &data) {
+        if (data.empty()) {
+            return;
+        }
+        last_log_us.store(now_us(), std::memory_order_relaxed);
+        clear_idle_line();
         if (!enable_progress) {
-            std::cout << data;
+            std::cout.write(data.data(), static_cast<std::streamsize>(data.size()));
             std::cout.flush();
             return;
         }
-        for (char ch : data) {
+
+        // Fast path: insert a prefix at the beginning of each line.
+        static constexpr const char *kPrefix = "    [server] ";
+        std::string out;
+        out.reserve(data.size() + 32);
+
+        size_t pos = 0;
+        while (pos < data.size()) {
             if (log_line_start) {
-                std::cout << "    [server] ";
+                out.append(kPrefix);
                 log_line_start = false;
             }
-            std::cout << ch;
-            if (ch == '\n') {
-                log_line_start = true;
+            const size_t newline = data.find('\n', pos);
+            if (newline == std::string::npos) {
+                out.append(data, pos, std::string::npos);
+                break;
             }
+            out.append(data, pos, newline - pos + 1);
+            log_line_start = true;
+            pos = newline + 1;
         }
+
+        std::cout.write(out.data(), static_cast<std::streamsize>(out.size()));
         std::cout.flush();
     };
 
@@ -244,6 +320,12 @@ grpc::Status RemoteServiceClient::TaskSubmit(const std::vector<UploadFileSpec> &
             final_result = response.result();
         }
     }
+
+    stop_idle.store(true, std::memory_order_relaxed);
+    if (idle_thread.joinable()) {
+        idle_thread.join();
+    }
+    clear_idle_line();
 
     grpc::Status status = stream->Finish();
 
