@@ -8,6 +8,12 @@
 #include <grpcpp/grpcpp.h>
 #include <remote_service.grpc.pb.h>
 
+struct ChildProcess {
+    pid_t pid = -1;
+    int read_fd = -1;
+    bool use_pty = false;
+};
+
 class TaskExecutor {
   public:
     TaskExecutor(grpc::ServerContext *context, const remote_service::TaskConfig &config, const std::filesystem::path &workspace_root,
@@ -16,6 +22,9 @@ class TaskExecutor {
     grpc::Status Execute(remote_service::TaskResult *result) const;
 
   private:
+    void LogExecutionContext(const std::filesystem::path &run_dir) const;
+    grpc::Status StartChildProcess(ChildProcess *child) const;
+    grpc::Status MonitorChildProcess(const ChildProcess &child, std::string *combined_output) const;
     grpc::Status RunCommand(std::string *combined_output) const;
     grpc::Status WriteTerminalOutput(const std::string &output, std::filesystem::path *output_dir) const;
     grpc::Status CreateOutputArchive(const std::filesystem::path &output_dir, std::string *archive_data) const;

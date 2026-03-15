@@ -1,15 +1,13 @@
 #include "client_api.h"
+#include "client_logging.h"
 #include "resource_control.pb.h"
 
 #include <brpc/channel.h>
 #include <butil/logging.h>
 #include <grpcpp/grpcpp.h>
 
-#include <cstdio>
 #include <filesystem>
-#include <fstream>
 #include <iomanip>
-#include <iostream>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -193,7 +191,8 @@ bool ParseArguments(int argc, char **argv, ProgramOptions *opts) {
 }
 
 void PrintStageFailure(int stage, const std::string &message) {
-    std::cerr << "[Stage " << stage << "] " << message << std::endl;
+    (void)stage;
+    LogClientError(message);
 }
 
 std::string FormatBytes(int64_t bytes) {
@@ -217,40 +216,6 @@ std::string FormatSeconds(double seconds) {
     std::ostringstream oss;
     oss << std::fixed << std::setprecision(2) << seconds;
     return oss.str();
-}
-
-std::string ShellEscape(const std::string &input) {
-    std::string escaped = "'";
-    for (char c : input) {
-        if (c == '\'') {
-            escaped += "'\\''";
-        } else {
-            escaped.push_back(c);
-        }
-    }
-    escaped.push_back('\'');
-    return escaped;
-}
-
-bool ExtractArchiveTo(const std::string &archive_data, const fs::path &destination) {
-    std::error_code ec;
-    fs::create_directories(destination, ec);
-    if (ec) {
-        return false;
-    }
-    ec.clear();
-    fs::path canonical_dest = fs::weakly_canonical(destination, ec);
-    if (ec) {
-        canonical_dest = destination;
-    }
-    const std::string command = "tar -xzf - -C " + ShellEscape(canonical_dest.string());
-    FILE *pipe = ::popen(command.c_str(), "w");
-    if (pipe == nullptr) {
-        return false;
-    }
-    const size_t written = std::fwrite(archive_data.data(), 1, archive_data.size(), pipe);
-    const int rc = ::pclose(pipe);
-    return written == archive_data.size() && rc == 0;
 }
 
 bool ReleaseResource(const std::string &controller_addr, const std::string &task_id) {
@@ -342,9 +307,38 @@ NodeInfo ApplyResourceAndGetNode(const std::string &controller_addr, const std::
     return info;
 }
 
+bool PrepareWorkspace(const ProgramOptions &opts, std::vector<UploadFileSpec> *files, UploadStats *stats) {
+    LogClientInfo("validating local workspace");
+
+    if (!CollectDirectoryFiles(opts.src_dir, files)) {
+        return false;
+    }
+
+    grpc::Status validation = ValidateUploadFiles(*files);
+    if (!validation.ok()) {
+        LogClientError(validation.error_message());
+        return false;
+    }
+
+    if (!ComputeUploadStats(*files, stats)) {
+        PrintStageFailure(1, "Failed to compute workspace statistics.");
+        return false;
+    }
+
+    LogClientInfo("workspace ready: " + std::to_string(stats->file_count) + " files, total " + FormatBytes(stats->total_bytes));
+    return true;
+}
+
+std::string FormatNodeTarget(const NodeInfo &node) {
+    if (node.ip.empty()) {
+        throw std::runtime_error("Controller returned an empty node IP.");
+    }
+    return node.ip + ":" + std::to_string(node.port);
+}
+
 // 将任务打包上传到执行节点，并获取执行结果
 int ExecuteTask(const std::string &target, const std::vector<UploadFileSpec> &files, const UploadStats &stats, const std::string &workspace_subdir,
-                const std::string &command, const std::string &local_output_dir, bool enable_pty) {
+                const std::string &command, bool enable_pty) {
     RemoteServiceClient client(grpc::CreateChannel(target, grpc::InsecureChannelCredentials()));
     RemoteServiceClient::TaskSubmitReport report;
     grpc::Status status = client.TaskSubmit(files, workspace_subdir, command, &report, &stats, enable_pty);
@@ -358,90 +352,47 @@ int ExecuteTask(const std::string &target, const std::vector<UploadFileSpec> &fi
         return 1;
     }
 
-    const std::string &archive = report.response.output_archive();
-    if (archive.empty()) {
-        std::cout << "\nExecution success." << std::endl;
-        std::cout << "Server message: " << report.response.message() << std::endl;
-        std::cout << "Total time: " << FormatSeconds(report.elapsed_seconds) << " s" << std::endl;
-        std::cout << "Note: server did not return an output archive." << std::endl;
-        return 0;
-    }
-
-    std::error_code ec;
-    fs::create_directories(local_output_dir, ec);
-    if (ec) {
-        PrintStageFailure(4, "Failed to create local output directory: " + local_output_dir);
-        return 1;
-    }
-
-    fs::path archive_path = fs::path(local_output_dir) / "server_output.tar.gz";
-    std::ofstream outfile(archive_path, std::ios::binary | std::ios::trunc);
-    if (!outfile.is_open()) {
-        PrintStageFailure(4, "Failed to save server outputs to " + archive_path.string());
-        return 1;
-    }
-    outfile.write(archive.data(), static_cast<std::streamsize>(archive.size()));
-    if (!outfile.good()) {
-        PrintStageFailure(4, "Failed to write server output archive.");
-        return 1;
-    }
-
-    std::cout << "[4/4] Restoring outputs to: " << local_output_dir << std::endl;
-    if (!ExtractArchiveTo(archive, fs::path(local_output_dir))) {
-        PrintStageFailure(4, "Failed to extract outputs to " + local_output_dir + " (archive is still saved as " + archive_path.string() + ")");
-        return 1;
-    }
-
-    std::cout << "\nExecution success." << std::endl;
-    std::cout << "Server message: " << report.response.message() << std::endl;
-    std::cout << "Saved server outputs archive to: " << archive_path << std::endl;
-    std::cout << "Total time: " << FormatSeconds(report.elapsed_seconds) << " s" << std::endl;
+    LogClientInfo("execution success");
+    LogClientInfo("server message: " + report.response.message());
+    LogClientInfo("total time: " + FormatSeconds(report.elapsed_seconds) + " s");
 
     return 0;
+}
+
+int RunIntegratedClient(const ProgramOptions &opts) {
+    std::vector<UploadFileSpec> files;
+    UploadStats stats;
+    if (!PrepareWorkspace(opts, &files, &stats)) {
+        return 1;
+    }
+
+    LogClientInfo("applying resources from controller");
+
+    std::string task_id;
+    const NodeInfo node = ApplyResourceAndGetNode(opts.controller_addr, opts.resource_type, opts.resource_count, opts.mem_req, opts.core_req, &task_id);
+    const std::string target = FormatNodeTarget(node);
+    LogClientInfo("uploading workspace and executing on " + target);
+
+    const int rc = ExecuteTask(target, files, stats, opts.workspace_subdir, opts.command, opts.pty);
+    if (!ReleaseResource(opts.controller_addr, task_id)) {
+        LogClientWarn("failed to release allocated resources for task " + task_id);
+    }
+    return rc;
 }
 
 } // namespace
 
 int main(int argc, char **argv) {
+    InitializeClientLogging("integrated_client");
     ProgramOptions opts;
     if (!ParseArguments(argc, argv, &opts)) {
         return 1;
     }
 
-    std::cout << "[1/4] Validating local workspace..." << std::endl;
-
-    std::vector<UploadFileSpec> files;
-    if (!CollectDirectoryFiles(opts.src_dir, &files)) {
-        return 1;
-    }
-
-    grpc::Status validation = ValidateUploadFiles(files);
-    if (!validation.ok()) {
-        std::cerr << validation.error_message() << std::endl;
-        return 1;
-    }
-
-    UploadStats stats;
-    if (!ComputeUploadStats(files, &stats)) {
-        PrintStageFailure(1, "Failed to compute workspace statistics.");
-        return 1;
-    }
-
-    std::cout << "    -> Found " << stats.file_count << " files, total " << FormatBytes(stats.total_bytes) << std::endl;
-    std::cout << "[2/4] Applying resources from controller..." << std::endl;
-
     try {
-        std::string task_id;
-        const NodeInfo node = ApplyResourceAndGetNode(opts.controller_addr, opts.resource_type, opts.resource_count, opts.mem_req, opts.core_req, &task_id);
-        const std::string target = std::string("10.26.42.234") + ":" + std::to_string(static_cast<int>(node.port));
-        std::cout << "[3/4] Uploading workspace and executing on: " << target << std::endl;
-        const int rc = ExecuteTask(target, files, stats, opts.workspace_subdir, opts.command, opts.local_output_dir, opts.pty);
-        (void)ReleaseResource(opts.controller_addr, task_id);
-        return rc;
+        return RunIntegratedClient(opts);
     } catch (const std::exception &ex) {
         std::cerr << ex.what() << std::endl;
         return 1;
     }
-
-    return 0;
 }

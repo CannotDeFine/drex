@@ -14,6 +14,7 @@
 #include <string>
 
 #include "remote_service_implement.h"
+#include "server_logging.h"
 
 using grpc::Server;
 using grpc::ServerBuilder;
@@ -24,6 +25,7 @@ ABSL_FLAG(std::string, address, "0.0.0.0", "Server address");
 
 void RunServer(const std::string &address, uint16_t port) {
     const std::string server_address = absl::StrFormat("%s:%d", address, port);
+    InitializeServerLogging("workspace");
 
     RemoteServiceImplement service;
 
@@ -35,7 +37,7 @@ void RunServer(const std::string &address, uint16_t port) {
     builder.RegisterService(&service);
 
     std::unique_ptr<Server> server(builder.BuildAndStart());
-    std::cout << "Server listening on " << server_address << std::endl;
+    LogServerInfo("remote_server listening on " + server_address);
     server->Wait();
 }
 

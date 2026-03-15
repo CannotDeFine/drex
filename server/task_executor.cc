@@ -1,12 +1,16 @@
 
 #include "task_executor.h"
 
+#include "server_logging.h"
+
 #include <cerrno>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <fstream>
 #include <iterator>
+#include <sstream>
 #include <poll.h>
 #include <pty.h>
 #include <signal.h>
@@ -16,6 +20,7 @@
 
 #include <atomic>
 #include <thread>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -46,6 +51,89 @@ std::string SanitizeFilenameComponent(std::string input) {
     return input;
 }
 
+int ParseEnvMillis(const char *name, int default_ms) {
+    const char *value = std::getenv(name);
+    if (value == nullptr || value[0] == '\0') {
+        return default_ms;
+    }
+    char *end = nullptr;
+    long parsed = std::strtol(value, &end, 10);
+    if (end == value || *end != '\0') {
+        return default_ms;
+    }
+    if (parsed < 0) {
+        return -1;
+    }
+    if (parsed > 24L * 60L * 60L * 1000L) {
+        return 24 * 60 * 60 * 1000;
+    }
+    return static_cast<int>(parsed);
+}
+
+bool SetNonBlocking(int fd) {
+    const int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        return false;
+    }
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+}
+
+std::string QuoteForLog(const std::string &value) {
+    return "'" + value + "'";
+}
+
+std::string JoinPaths(const std::vector<fs::path> &paths) {
+    std::ostringstream oss;
+    for (size_t i = 0; i < paths.size(); ++i) {
+        if (i != 0) {
+            oss << ", ";
+        }
+        oss << paths[i].filename().string();
+    }
+    return oss.str();
+}
+
+std::string FindCommandInPath(const std::string &name) {
+    const char *path_env = std::getenv("PATH");
+    if (path_env == nullptr || path_env[0] == '\0') {
+        return "<PATH unset>";
+    }
+
+    std::stringstream ss(path_env);
+    std::string item;
+    while (std::getline(ss, item, ':')) {
+        if (item.empty()) {
+            continue;
+        }
+        fs::path candidate = fs::path(item) / name;
+        std::error_code ec;
+        if (fs::exists(candidate, ec)) {
+            return candidate.string();
+        }
+    }
+    return "<not found>";
+}
+
+std::string BuildCommandForExecution(const std::string &command, bool want_pty) {
+    if (want_pty) {
+        return command;
+    }
+
+    const std::string stdbuf_path = FindCommandInPath("stdbuf");
+    if (stdbuf_path == "<not found>" || stdbuf_path == "<PATH unset>") {
+        return command;
+    }
+
+    return ShellEscape(stdbuf_path) + " -oL -eL /bin/sh -c " + ShellEscape(command);
+}
+
+void ConfigureChildEnvironment(bool want_pty) {
+    setenv("PYTHONUNBUFFERED", "1", 0);
+    if (want_pty) {
+        setenv("TERM", "xterm-256color", 0);
+    }
+}
+
 } // namespace
 
 TaskExecutor::TaskExecutor(grpc::ServerContext *context, const remote_service::TaskConfig &config, const fs::path &workspace_root,
@@ -67,9 +155,14 @@ grpc::Status TaskExecutor::Execute(remote_service::TaskResult *result) const {
         return grpc::Status(grpc::StatusCode::INTERNAL, "Failed to prepare workspace directory for execution!");
     }
 
+    LogServerInfo("starting command execution");
+    LogServerDebug("starting command in '" + run_dir.string() + "'");
+    LogExecutionContext(run_dir);
+
     std::string combined_output;
     grpc::Status run_status = RunCommand(&combined_output);
     if (!run_status.ok()) {
+        LogServerWarn("command failed in '" + run_dir.string() + "': " + run_status.error_message());
         return run_status;
     }
 
@@ -80,111 +173,118 @@ grpc::Status TaskExecutor::Execute(remote_service::TaskResult *result) const {
     result->clear_output_archive();
     result->set_archive_size(0);
 
+    LogServerInfo("command finished successfully");
+    LogServerDebug("command finished successfully in '" + run_dir.string() + "'");
+
     return grpc::Status::OK;
 }
 
-grpc::Status TaskExecutor::RunCommand(std::string *combined_output) const {
-    if (combined_output == nullptr) {
-        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Output buffer must not be null!");
+grpc::Status TaskExecutor::StartChildProcess(ChildProcess *child) const {
+    if (child == nullptr) {
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "ChildProcess pointer must not be null!");
     }
-    combined_output->clear();
 
     const bool want_pty = config_.enable_pty() && getenv("RPC_WORK_DISABLE_PTY") == nullptr;
-    int read_fd = -1;
-    pid_t pid = -1;
-
+    const std::string exec_command = BuildCommandForExecution(config_.command(), want_pty);
     if (want_pty) {
-        // Use forkpty instead of `script` to avoid extra wrapper processes that may
-        // create new sessions/process groups and escape killpg().
         int master_fd = -1;
-        pid = forkpty(&master_fd, nullptr, nullptr, nullptr);
+        const pid_t pid = forkpty(&master_fd, nullptr, nullptr, nullptr);
         if (pid < 0) {
             return grpc::Status(grpc::StatusCode::INTERNAL, std::string("forkpty failed: ") + std::strerror(errno));
         }
         if (pid == 0) {
             (void)setpgid(0, 0);
+            ConfigureChildEnvironment(true);
             if (chdir((workspace_root_ / config_.workspace_subdir()).c_str()) != 0) {
                 _exit(127);
             }
-            execl("/bin/sh", "sh", "-c", config_.command().c_str(), static_cast<char *>(nullptr));
-            _exit(127);
-        }
-        read_fd = master_fd;
-    } else {
-        int pipefd[2];
-        if (pipe(pipefd) != 0) {
-            return grpc::Status(grpc::StatusCode::INTERNAL, std::string("Failed to create pipe: ") + std::strerror(errno));
-        }
-        pid = fork();
-        if (pid < 0) {
-            close(pipefd[0]);
-            close(pipefd[1]);
-            return grpc::Status(grpc::StatusCode::INTERNAL, std::string("Fork failed: ") + std::strerror(errno));
-        } else if (pid == 0) {
-            (void)setpgid(0, 0);
-            if (chdir((workspace_root_ / config_.workspace_subdir()).c_str()) != 0) {
-                _exit(127);
-            }
-            close(pipefd[0]);
-            if (dup2(pipefd[1], STDOUT_FILENO) < 0 || dup2(pipefd[1], STDERR_FILENO) < 0) {
-                _exit(127);
-            }
-            close(pipefd[1]);
-
-            execl("/bin/sh", "sh", "-c", config_.command().c_str(), static_cast<char *>(nullptr));
+            execl("/bin/sh", "sh", "-c", exec_command.c_str(), static_cast<char *>(nullptr));
             _exit(127);
         }
 
-        close(pipefd[1]);
-        read_fd = pipefd[0];
+        child->pid = pid;
+        child->read_fd = master_fd;
+        child->use_pty = true;
+        if (!SetNonBlocking(child->read_fd)) {
+            close(child->read_fd);
+            kill(pid, SIGKILL);
+            (void)waitpid(pid, nullptr, 0);
+            return grpc::Status(grpc::StatusCode::INTERNAL, std::string("Failed to configure PTY fd: ") + std::strerror(errno));
+        }
+        return grpc::Status::OK;
     }
 
-    // Best-effort ensure a dedicated process group exists even if setpgid in child raced.
-    (void)setpgid(pid, pid);
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, std::string("Failed to create pipe: ") + std::strerror(errno));
+    }
 
-    char buffer[4096];
+    const pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return grpc::Status(grpc::StatusCode::INTERNAL, std::string("Fork failed: ") + std::strerror(errno));
+    }
+    if (pid == 0) {
+        (void)setpgid(0, 0);
+        ConfigureChildEnvironment(false);
+        if (chdir((workspace_root_ / config_.workspace_subdir()).c_str()) != 0) {
+            _exit(127);
+        }
+        close(pipefd[0]);
+        if (dup2(pipefd[1], STDOUT_FILENO) < 0 || dup2(pipefd[1], STDERR_FILENO) < 0) {
+            _exit(127);
+        }
+        close(pipefd[1]);
+
+        execl("/bin/sh", "sh", "-c", exec_command.c_str(), static_cast<char *>(nullptr));
+        _exit(127);
+    }
+
+    close(pipefd[1]);
+    child->pid = pid;
+    child->read_fd = pipefd[0];
+    child->use_pty = false;
+    if (!SetNonBlocking(child->read_fd)) {
+        close(child->read_fd);
+        kill(pid, SIGKILL);
+        (void)waitpid(pid, nullptr, 0);
+        return grpc::Status(grpc::StatusCode::INTERNAL, std::string("Failed to configure pipe fd: ") + std::strerror(errno));
+    }
+    return grpc::Status::OK;
+}
+
+grpc::Status TaskExecutor::MonitorChildProcess(const ChildProcess &child, std::string *combined_output) const {
+    constexpr int kPtyPollTimeoutMs = 30;
+    constexpr int kPipePollTimeoutMs = 200;
+    constexpr size_t kPtyReadSize = 1024;
+    constexpr size_t kPipeReadSize = 4096;
+
+    std::vector<char> buffer(child.use_pty ? kPtyReadSize : kPipeReadSize);
     int status = 0;
     std::atomic<bool> cancelled{false};
 
-    const auto parse_env_ms = [](const char *name, int default_ms) -> int {
-        const char *value = std::getenv(name);
-        if (value == nullptr || value[0] == '\0') {
-            return default_ms;
-        }
-        char *end = nullptr;
-        long parsed = std::strtol(value, &end, 10);
-        if (end == value || *end != '\0') {
-            return default_ms;
-        }
-        if (parsed < 0) {
-            return -1;
-        }
-        if (parsed > 24L * 60L * 60L * 1000L) {
-            return 24 * 60 * 60 * 1000;
-        }
-        return static_cast<int>(parsed);
-    };
-
-    // Optional watchdog: if the task stops producing output and never exits (e.g., stuck cleanup),
-    // you can enable a kill+timeout by setting RPC_WORK_IDLE_TIMEOUT_MS to a non-negative value.
-    // Default is disabled.
-    const int idle_timeout_ms = parse_env_ms("RPC_WORK_IDLE_TIMEOUT_MS", -1);
+    const int idle_timeout_ms = ParseEnvMillis("RPC_WORK_IDLE_TIMEOUT_MS", -1);
     const int idle_log_every_ms = 1000;
+    const int startup_heartbeat_ms = 1000;
+    const int running_heartbeat_ms = 5000;
     auto last_output_tp = std::chrono::steady_clock::now();
     auto last_idle_log_tp = last_output_tp;
+    auto start_tp = last_output_tp;
+    bool saw_remote_output = false;
+
+    EmitLogChunk("[From server] command started, waiting for output...\n");
 
     auto kill_child_group = [&](int sig) {
-        // Best-effort; ignore errors if process already exited.
-        (void)killpg(pid, sig);
+        (void)killpg(child.pid, sig);
     };
 
     std::atomic<bool> stop_cancel_thread{false};
     std::thread cancel_thread;
     if (context_ != nullptr) {
         cancel_thread = std::thread([&]() {
-            // Tight-ish loop to react quickly without blocking output reads.
             while (!stop_cancel_thread.load(std::memory_order_relaxed) && !context_->IsCancelled()) {
-                usleep(1000); // 1ms
+                usleep(1000);
             }
 
             if (stop_cancel_thread.load(std::memory_order_relaxed)) {
@@ -192,37 +292,34 @@ grpc::Status TaskExecutor::RunCommand(std::string *combined_output) const {
             }
             cancelled.store(true, std::memory_order_relaxed);
             kill_child_group(SIGTERM);
-            // Give the process a short grace period, then hard kill.
             usleep(2000 * 1000);
             kill_child_group(SIGKILL);
         });
     }
 
-    // Read output while the child is running.
-    // IMPORTANT: do not rely solely on EOF, because background processes may inherit stdout/stderr
-    // and keep the pipe/pty open after the main command exits, which would otherwise hang forever.
     bool child_exited = false;
     int wait_status = 0;
+    auto child_exit_tp = std::chrono::steady_clock::time_point{};
     for (;;) {
         if (!child_exited) {
-            const pid_t w = waitpid(pid, &wait_status, WNOHANG);
-            if (w == pid) {
+            const pid_t w = waitpid(child.pid, &wait_status, WNOHANG);
+            if (w == child.pid) {
                 child_exited = true;
+                child_exit_tp = std::chrono::steady_clock::now();
             }
         }
 
         pollfd pfd;
-        pfd.fd = read_fd;
+        pfd.fd = child.read_fd;
         pfd.events = POLLIN | POLLHUP;
         pfd.revents = 0;
 
-        const int timeout_ms = 200;
-        const int prc = poll(&pfd, 1, timeout_ms);
+        const int prc = poll(&pfd, 1, child.use_pty ? kPtyPollTimeoutMs : kPipePollTimeoutMs);
         if (prc < 0) {
             if (errno == EINTR) {
                 continue;
             }
-            close(read_fd);
+            close(child.read_fd);
             stop_cancel_thread.store(true, std::memory_order_relaxed);
             if (cancel_thread.joinable()) {
                 cancel_thread.join();
@@ -231,15 +328,12 @@ grpc::Status TaskExecutor::RunCommand(std::string *combined_output) const {
         }
 
         if (prc == 0) {
-            // No output available right now.
             if (!child_exited) {
                 const auto now = std::chrono::steady_clock::now();
-                const int idle_ms = static_cast<int>(
-                    std::chrono::duration_cast<std::chrono::milliseconds>(now - last_output_tp).count());
+                const int idle_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(now - last_output_tp).count());
 
                 if (idle_timeout_ms >= 0 && idle_ms >= idle_timeout_ms) {
-                    EmitLogChunk("\nNo output for " + std::to_string(idle_ms) +
-                                 " ms; task did not exit. Terminating process group...\n");
+                    EmitLogChunk("\nNo output for " + std::to_string(idle_ms) + " ms; task did not exit. Terminating process group...\n");
                     kill_child_group(SIGTERM);
                     usleep(2000 * 1000);
                     kill_child_group(SIGKILL);
@@ -247,60 +341,86 @@ grpc::Status TaskExecutor::RunCommand(std::string *combined_output) const {
                     if (cancel_thread.joinable()) {
                         cancel_thread.join();
                     }
-                    // Reap child.
-                    (void)waitpid(pid, &status, 0);
+                    (void)waitpid(child.pid, &status, 0);
                     return grpc::Status(grpc::StatusCode::DEADLINE_EXCEEDED,
                                         "Task timed out due to inactivity (no terminal output).\n"
                                         "Hint: set RPC_WORK_IDLE_TIMEOUT_MS=-1 to disable, or increase it.");
                 }
 
-                const int since_last_log_ms = static_cast<int>(
-                    std::chrono::duration_cast<std::chrono::milliseconds>(now - last_idle_log_tp).count());
-                if (idle_timeout_ms >= 0) {
-                    if (since_last_log_ms >= idle_log_every_ms && idle_ms >= idle_log_every_ms) {
-                        EmitLogChunk("waiting for task process to exit... (idle " + std::to_string(idle_ms / 1000) + "s)\n");
+                const int since_last_log_ms =
+                    static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(now - last_idle_log_tp).count());
+                if (!saw_remote_output) {
+                    const int since_start_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(now - start_tp).count());
+                    if (since_last_log_ms >= startup_heartbeat_ms && since_start_ms >= startup_heartbeat_ms) {
+                        EmitLogChunk("[From server] command is running... (no output yet, " + std::to_string(since_start_ms / 1000) + "s)\n");
                         last_idle_log_tp = now;
                     }
+                } else if (idle_timeout_ms >= 0 && since_last_log_ms >= idle_log_every_ms && idle_ms >= idle_log_every_ms) {
+                    EmitLogChunk("waiting for task process to exit... (idle " + std::to_string(idle_ms / 1000) + "s)\n");
+                    last_idle_log_tp = now;
+                } else if (since_last_log_ms >= running_heartbeat_ms && idle_ms >= running_heartbeat_ms) {
+                    EmitLogChunk("[From server] command still running... (last output " + std::to_string(idle_ms / 1000) + "s ago)\n");
+                    last_idle_log_tp = now;
                 }
-            }
-            if (child_exited) {
-                break;
+            } else {
+                const auto drain_ms =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - child_exit_tp).count();
+                if (drain_ms >= 50) {
+                    break;
+                }
             }
             continue;
         }
 
         if (pfd.revents & (POLLIN | POLLHUP)) {
-            const ssize_t bytes_read = read(read_fd, buffer, sizeof(buffer));
-            if (bytes_read > 0) {
-                combined_output->append(buffer, static_cast<size_t>(bytes_read));
-                EmitLogChunk(std::string(buffer, static_cast<size_t>(bytes_read)));
-                last_output_tp = std::chrono::steady_clock::now();
-                continue;
+            bool reached_end_of_stream = false;
+            for (;;) {
+                const ssize_t bytes_read = read(child.read_fd, buffer.data(), buffer.size());
+                if (bytes_read > 0) {
+                    combined_output->append(buffer.data(), static_cast<size_t>(bytes_read));
+                    EmitLogChunk(std::string(buffer.data(), static_cast<size_t>(bytes_read)));
+                    last_output_tp = std::chrono::steady_clock::now();
+                    saw_remote_output = true;
+                    continue;
+                }
+                if (bytes_read == 0) {
+                    reached_end_of_stream = true;
+                    break;
+                }
+                if (errno == EINTR) {
+                    continue;
+                }
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    break;
+                }
+                if (child.use_pty && errno == EIO) {
+                    // PTY masters often report EIO once the slave side is closed.
+                    reached_end_of_stream = true;
+                    break;
+                }
+                close(child.read_fd);
+                stop_cancel_thread.store(true, std::memory_order_relaxed);
+                if (cancel_thread.joinable()) {
+                    cancel_thread.join();
+                }
+                return grpc::Status(grpc::StatusCode::INTERNAL, std::string("Failed to read task output: ") + std::strerror(errno));
             }
-            if (bytes_read == 0) {
-                break; // EOF
+
+            if (reached_end_of_stream) {
+                break;
             }
-            if (errno == EINTR) {
-                continue;
-            }
-            close(read_fd);
-            stop_cancel_thread.store(true, std::memory_order_relaxed);
-            if (cancel_thread.joinable()) {
-                cancel_thread.join();
-            }
-            return grpc::Status(grpc::StatusCode::INTERNAL, std::string("Failed to read task output: ") + std::strerror(errno));
+            continue;
         }
     }
 
-    close(read_fd);
-
+    close(child.read_fd);
     stop_cancel_thread.store(true, std::memory_order_relaxed);
     if (cancel_thread.joinable()) {
         cancel_thread.join();
     }
 
     if (!child_exited) {
-        if (waitpid(pid, &status, 0) < 0) {
+        if (waitpid(child.pid, &status, 0) < 0) {
             return grpc::Status(grpc::StatusCode::INTERNAL, "Failed to wait for task process!");
         }
     } else {
@@ -310,19 +430,76 @@ grpc::Status TaskExecutor::RunCommand(std::string *combined_output) const {
     if (cancelled.load(std::memory_order_relaxed)) {
         return grpc::Status(grpc::StatusCode::CANCELLED, "Client cancelled request.");
     }
-
     if (WIFEXITED(status)) {
         const int exit_code = WEXITSTATUS(status);
         if (exit_code != 0) {
-            return grpc::Status(grpc::StatusCode::INTERNAL, "Task failed with exit code: " + std::to_string(exit_code));
+            std::string message = "Task failed with exit code: " + std::to_string(exit_code);
+            if (!combined_output->empty()) {
+                constexpr size_t kTailLimit = 4096;
+                const size_t start = combined_output->size() > kTailLimit ? combined_output->size() - kTailLimit : 0;
+                message += "\n--- remote output tail ---\n";
+                message.append(combined_output->data() + start, combined_output->size() - start);
+            }
+            return grpc::Status(grpc::StatusCode::INTERNAL, message);
         }
-    } else if (WIFSIGNALED(status)) {
+        return grpc::Status::OK;
+    }
+    if (WIFSIGNALED(status)) {
         return grpc::Status(grpc::StatusCode::INTERNAL, "Task terminated by signal: " + std::to_string(WTERMSIG(status)));
-    } else {
-        return grpc::Status(grpc::StatusCode::INTERNAL, "Task ended abnormally!");
+    }
+    return grpc::Status(grpc::StatusCode::INTERNAL, "Task ended abnormally!");
+}
+
+grpc::Status TaskExecutor::RunCommand(std::string *combined_output) const {
+    if (combined_output == nullptr) {
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Output buffer must not be null!");
+    }
+    combined_output->clear();
+    ChildProcess child;
+    grpc::Status start_status = StartChildProcess(&child);
+    if (!start_status.ok()) {
+        return start_status;
     }
 
-    return grpc::Status::OK;
+    // Best-effort ensure a dedicated process group exists even if setpgid in child raced.
+    (void)setpgid(child.pid, child.pid);
+    return MonitorChildProcess(child, combined_output);
+}
+
+void TaskExecutor::LogExecutionContext(const fs::path &run_dir) const {
+    std::ostringstream oss;
+    oss << "execution context: cwd=" << QuoteForLog(run_dir.string())
+        << " path=" << QuoteForLog(std::getenv("PATH") != nullptr ? std::getenv("PATH") : "<unset>")
+        << " shell=" << QuoteForLog(FindCommandInPath("sh"))
+        << " bash=" << QuoteForLog(FindCommandInPath("bash"))
+        << " g++=" << QuoteForLog(FindCommandInPath("g++"))
+        << " taskset=" << QuoteForLog(FindCommandInPath("taskset"))
+        << " nice=" << QuoteForLog(FindCommandInPath("nice"));
+    LogServerDebug(oss.str());
+
+    std::error_code ec;
+    const fs::path script_path = run_dir / "run_low.sh";
+    std::ostringstream file_oss;
+    file_oss << "workspace files: ";
+    std::vector<fs::path> entries;
+    for (const auto &entry : fs::directory_iterator(run_dir, ec)) {
+        if (ec) {
+            break;
+        }
+        entries.push_back(entry.path());
+    }
+    if (ec) {
+        file_oss << "<failed to enumerate: " << ec.message() << ">";
+    } else {
+        file_oss << JoinPaths(entries);
+    }
+    LogServerDebug(file_oss.str());
+
+    std::ostringstream script_oss;
+    script_oss << "script check: path=" << QuoteForLog(script_path.string())
+               << " exists=" << (fs::exists(script_path) ? "true" : "false")
+               << " executable=" << (::access(script_path.c_str(), X_OK) == 0 ? "true" : "false");
+    LogServerDebug(script_oss.str());
 }
 
 grpc::Status TaskExecutor::WriteTerminalOutput(const std::string &output, fs::path *output_dir) const {

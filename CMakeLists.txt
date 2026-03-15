@@ -18,6 +18,15 @@ set(_THIRD_PARTY_LIBRARY_HINTS
 set(CMAKE_BUILD_RPATH "${RPC_THIRD_PARTY_PREFIX}/lib;${RPC_THIRD_PARTY_PREFIX}/lib64")
 set(CMAKE_INSTALL_RPATH "${RPC_THIRD_PARTY_PREFIX}/lib;${RPC_THIRD_PARTY_PREFIX}/lib64")
 
+set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_EXAMPLE_HO OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_TESTS_HO OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_BENCH OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_PIC ON CACHE BOOL "" FORCE)
+add_subdirectory(3rdparty/spdlog)
+
 # Dependencies
 # system_libaries
 # find_package(CURL REQUIRED)
@@ -187,6 +196,7 @@ target_link_libraries(remote_grpc_proto
 # server
 add_executable(remote_server
     server/server.cc
+    server/server_logging.cc
     server/remote_service_implement.cc
     server/task_executor.cc
 )
@@ -195,6 +205,7 @@ target_link_libraries(remote_server
         project_options
         project_paths
         remote_grpc_proto
+        spdlog::spdlog_header_only
         ${ABSL_LIBRARIES}
         util
 )
@@ -202,6 +213,7 @@ target_link_libraries(remote_server
 # client
 add_executable(remote_client
     client/client.cc
+    client/client_logging.cc
     client/client_api.cc
 )
 target_link_libraries(remote_client
@@ -209,6 +221,7 @@ target_link_libraries(remote_client
         project_options
         project_paths
         remote_grpc_proto
+        spdlog::spdlog_header_only
         ${ABSL_LIBRARIES}
 )
 
@@ -237,6 +250,7 @@ target_link_libraries(resource_client
 )
 
 add_executable(integrated_client
+    client/client_logging.cc
     client/integrated_client.cc
     client/client_api.cc
     ${resource_control_proto_hdrs}
@@ -247,6 +261,7 @@ target_link_libraries(integrated_client
         project_options
         project_paths
         remote_grpc_proto
+        spdlog::spdlog_header_only
         ${BRPC_LIB}
         ${BRPC_DEPS}
         ${ABSL_LIBRARIES}

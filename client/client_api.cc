@@ -1,5 +1,7 @@
 #include "client_api.h"
 
+#include "client_logging.h"
+
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -18,6 +20,7 @@ namespace {
 
 namespace fs = std::filesystem;
 constexpr size_t kChunkSize = 1024 * 1024;
+using TaskStream = grpc::ClientReaderWriter<remote_service::TaskRequest, remote_service::TaskResponse>;
 
 std::string HumanReadableBytes(int64_t bytes) {
     if (bytes <= 0) {
@@ -37,6 +40,194 @@ std::string HumanReadableBytes(int64_t bytes) {
         oss << std::fixed << std::setprecision(1) << value << ' ' << kUnits[unit];
     }
     return oss.str();
+}
+
+struct UploadProgress {
+    int64_t bytes_sent = 0;
+    int64_t total_bytes = -1;
+    int next_percent = 10;
+
+    bool enabled() const { return total_bytes >= 0; }
+
+    void Report(bool force) {
+        if (!enabled() || total_bytes <= 0) {
+            return;
+        }
+
+        const int percent = total_bytes == 0 ? 100 : static_cast<int>((bytes_sent * 100) / total_bytes);
+        if (!force && percent < next_percent && bytes_sent != total_bytes) {
+            return;
+        }
+
+        LogClientInfo("upload progress: " + HumanReadableBytes(bytes_sent) + " / " + HumanReadableBytes(total_bytes) + " (" +
+                      std::to_string(percent) + "%)");
+        while (percent >= next_percent) {
+            next_percent += 10;
+        }
+    }
+};
+
+bool SendTaskConfig(TaskStream *stream, const std::string &workspace_subdir, const std::string &command, const std::string &output_subdir,
+                    bool enable_pty) {
+    remote_service::TaskRequest config_request;
+    auto *config = config_request.mutable_config();
+    config->set_workspace_subdir(workspace_subdir);
+    config->set_command(command);
+    config->set_output_subdir(output_subdir);
+    config->set_enable_pty(enable_pty);
+    return stream->Write(config_request);
+}
+
+grpc::Status StreamWorkspaceFiles(TaskStream *stream, const std::vector<UploadFileSpec> &files, UploadProgress *progress) {
+    std::vector<char> buffer(kChunkSize);
+
+    for (const auto &file : files) {
+        std::ifstream infile(file.local_path, std::ios::binary);
+        if (!infile.is_open()) {
+            return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Cannot open file: " + file.local_path);
+        }
+
+        std::error_code ec;
+        int64_t declared_size = -1;
+        const uintmax_t on_disk = fs::file_size(file.local_path, ec);
+        if (!ec) {
+            declared_size = static_cast<int64_t>(on_disk);
+        }
+
+        bool first_chunk = true;
+        while (infile) {
+            infile.read(buffer.data(), buffer.size());
+            const std::streamsize bytes_read = infile.gcount();
+            if (bytes_read <= 0) {
+                break;
+            }
+
+            remote_service::TaskRequest chunk_request;
+            auto *chunk = chunk_request.mutable_file_chunk();
+            chunk->set_data(buffer.data(), bytes_read);
+            chunk->set_relative_path(file.relative_path);
+            chunk->set_file_start(first_chunk);
+            if (first_chunk && declared_size >= 0) {
+                chunk->set_file_size(declared_size);
+            }
+            if (infile.eof()) {
+                chunk->set_file_end(true);
+            }
+
+            progress->bytes_sent += bytes_read;
+            progress->Report(false);
+            if (!stream->Write(chunk_request)) {
+                return grpc::Status(grpc::StatusCode::ABORTED, "Failed to stream file contents to the server.");
+            }
+            first_chunk = false;
+        }
+    }
+
+    progress->Report(true);
+    return grpc::Status::OK;
+}
+
+void DrainServerResponses(TaskStream *stream, bool enable_progress, bool raw_terminal_output, remote_service::TaskResult *final_result) {
+    remote_service::TaskResponse response;
+    bool log_line_start = true;
+
+    // Printed locally while the server is quiet so the terminal does not look stuck.
+    const bool enable_idle_indicator = enable_progress && ::isatty(fileno(stderr));
+    std::atomic<bool> stop_idle{false};
+    std::atomic<int64_t> last_log_us{0};
+    auto now_us = []() -> int64_t {
+        using clock = std::chrono::steady_clock;
+        return std::chrono::duration_cast<std::chrono::microseconds>(clock::now().time_since_epoch()).count();
+    };
+    last_log_us.store(now_us(), std::memory_order_relaxed);
+    std::atomic<bool> idle_line_visible{false};
+
+    auto clear_idle_line = [&]() {
+        if (!enable_idle_indicator) {
+            return;
+        }
+        if (!idle_line_visible.exchange(false)) {
+            return;
+        }
+        std::cerr << '\r' << std::string(96, ' ') << '\r';
+        std::cerr.flush();
+    };
+
+    std::thread idle_thread;
+    if (enable_idle_indicator) {
+        idle_thread = std::thread([&]() {
+            int64_t last_print_sec = -1;
+            while (!stop_idle.load(std::memory_order_relaxed)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                if (stop_idle.load(std::memory_order_relaxed)) {
+                    break;
+                }
+
+                const int64_t idle_us = now_us() - last_log_us.load(std::memory_order_relaxed);
+                if (idle_us < 1200 * 1000) {
+                    continue;
+                }
+                const int64_t idle_sec = idle_us / 1'000'000;
+                if (idle_sec == last_print_sec) {
+                    continue;
+                }
+                last_print_sec = idle_sec;
+                idle_line_visible.store(true, std::memory_order_relaxed);
+                std::cerr << "\r    [client] waiting for remote output... (idle " << idle_sec << "s)";
+                std::cerr.flush();
+            }
+        });
+    }
+
+    auto print_log = [&](const std::string &data) {
+        if (data.empty()) {
+            return;
+        }
+        last_log_us.store(now_us(), std::memory_order_relaxed);
+        clear_idle_line();
+        if (raw_terminal_output || !enable_progress) {
+            std::cout.write(data.data(), static_cast<std::streamsize>(data.size()));
+            std::cout.flush();
+            return;
+        }
+
+        static constexpr const char *kPrefix = "[From server] ";
+        std::string out;
+        out.reserve(data.size() + 32);
+
+        size_t pos = 0;
+        while (pos < data.size()) {
+            if (log_line_start) {
+                out.append(kPrefix);
+                log_line_start = false;
+            }
+            const size_t newline = data.find('\n', pos);
+            if (newline == std::string::npos) {
+                out.append(data, pos, std::string::npos);
+                break;
+            }
+            out.append(data, pos, newline - pos + 1);
+            log_line_start = true;
+            pos = newline + 1;
+        }
+
+        std::cout.write(out.data(), static_cast<std::streamsize>(out.size()));
+        std::cout.flush();
+    };
+
+    while (stream->Read(&response)) {
+        if (response.has_log_chunk()) {
+            print_log(response.log_chunk().data());
+        } else if (response.has_result()) {
+            *final_result = response.result();
+        }
+    }
+
+    stop_idle.store(true, std::memory_order_relaxed);
+    if (idle_thread.joinable()) {
+        idle_thread.join();
+    }
+    clear_idle_line();
 }
 
 } // namespace
@@ -125,220 +316,49 @@ grpc::Status RemoteServiceClient::TaskSubmit(const std::vector<UploadFileSpec> &
     const std::string effective_output_subdir = (fs::path(workspace_subdir) / "output").generic_string();
 
     grpc::ClientContext context;
-    std::shared_ptr<grpc::ClientReaderWriter<remote_service::TaskRequest, remote_service::TaskResponse>> stream(
-        stub_->TaskSubmission(&context));
+    std::shared_ptr<TaskStream> stream(stub_->TaskSubmission(&context));
 
     timeval start, end;
     gettimeofday(&start, nullptr);
 
-    remote_service::TaskRequest config_request;
-    auto *config = config_request.mutable_config();
-    config->set_workspace_subdir(workspace_subdir);
-    config->set_command(command);
-    config->set_output_subdir(effective_output_subdir);
-    config->set_enable_pty(enable_pty);
-
-    if (!stream->Write(config_request)) {
+    if (!SendTaskConfig(stream.get(), workspace_subdir, command, effective_output_subdir, enable_pty)) {
         stream->WritesDone();
         stream->Finish();
         return grpc::Status(grpc::StatusCode::ABORTED, "Failed to send task configuration to the server.");
     }
 
-    std::vector<char> buffer(kChunkSize);
-    int64_t total_bytes = 0;
-    bool write_failed = false;
-    const bool enable_progress = (upload_stats != nullptr && upload_stats->total_bytes >= 0);
-    const int64_t total_expected_bytes = enable_progress ? upload_stats->total_bytes : -1;
-    int next_progress = 10;
-    auto report_progress = [&](bool force) {
-        if (!enable_progress || total_expected_bytes <= 0) {
-            return;
-        }
-        int percent = total_expected_bytes == 0 ? 100 : static_cast<int>((total_bytes * 100) / total_expected_bytes);
-        if (force || percent >= next_progress || total_bytes == total_expected_bytes) {
-            std::cout << "    -> Sent " << HumanReadableBytes(total_bytes) << " / " << HumanReadableBytes(total_expected_bytes) << " (" << percent
-                      << "%)" << std::endl;
-            while (percent >= next_progress) {
-                next_progress += 10;
-            }
-        }
-    };
-
-    for (const auto &file : files) {
-        std::ifstream infile(file.local_path, std::ios::binary);
-        if (!infile.is_open()) {
-            stream->WritesDone();
-            stream->Finish();
-            return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Cannot open file: " + file.local_path);
-        }
-
-        std::error_code ec;
-        int64_t declared_size = -1;
-        const uintmax_t on_disk = fs::file_size(file.local_path, ec);
-        if (!ec) {
-            declared_size = static_cast<int64_t>(on_disk);
-        }
-
-        bool first_chunk = true;
-        while (infile) {
-            infile.read(buffer.data(), buffer.size());
-            const std::streamsize bytes_read = infile.gcount();
-            if (bytes_read <= 0) {
-                break;
-            }
-
-            remote_service::TaskRequest chunk_request;
-            auto *chunk = chunk_request.mutable_file_chunk();
-            chunk->set_data(buffer.data(), bytes_read);
-            chunk->set_relative_path(file.relative_path);
-            chunk->set_file_start(first_chunk);
-            if (first_chunk && declared_size >= 0) {
-                chunk->set_file_size(declared_size);
-            }
-            if (infile.eof()) {
-                chunk->set_file_end(true);
-            }
-
-            total_bytes += bytes_read;
-            report_progress(false);
-            if (!stream->Write(chunk_request)) {
-                write_failed = true;
-                break;
-            }
-            first_chunk = false;
-        }
-
-        if (write_failed) {
-            break;
-        }
+    UploadProgress progress;
+    if (upload_stats != nullptr) {
+        progress.total_bytes = upload_stats->total_bytes;
     }
+    const bool enable_progress = progress.enabled();
 
-    report_progress(true);
+    const grpc::Status upload_status = StreamWorkspaceFiles(stream.get(), files, &progress);
 
     stream->WritesDone();
 
     if (enable_progress) {
-        std::cout << "[3/4] Executing command on server: \"" << command << "\" (output -> " << effective_output_subdir << ")" << std::endl;
+        LogClientInfo("executing command on server (output -> " + effective_output_subdir + ")");
     }
 
     remote_service::TaskResult final_result;
-    remote_service::TaskResponse response;
-    bool log_line_start = true;
-
-    // Local-only idle indicator: helps when the remote process is preempted or quiet.
-    // Printed to stderr, single-line, no extra remote logs.
-    const bool enable_idle_indicator = enable_progress && ::isatty(fileno(stderr));
-    std::atomic<bool> stop_idle{false};
-    std::atomic<int64_t> last_log_us{0};
-    auto now_us = []() -> int64_t {
-        using clock = std::chrono::steady_clock;
-        return std::chrono::duration_cast<std::chrono::microseconds>(clock::now().time_since_epoch()).count();
-    };
-    last_log_us.store(now_us(), std::memory_order_relaxed);
-    std::atomic<bool> idle_line_visible{false};
-
-    auto clear_idle_line = [&]() {
-        if (!enable_idle_indicator) {
-            return;
-        }
-        if (!idle_line_visible.exchange(false)) {
-            return;
-        }
-        // Clear the current stderr line without ANSI.
-        std::cerr << '\r' << std::string(96, ' ') << '\r';
-        std::cerr.flush();
-    };
-
-    std::thread idle_thread;
-    if (enable_idle_indicator) {
-        idle_thread = std::thread([&]() {
-            int64_t last_print_sec = -1;
-            while (!stop_idle.load(std::memory_order_relaxed)) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(200));
-                if (stop_idle.load(std::memory_order_relaxed)) {
-                    break;
-                }
-
-                const int64_t idle_us = now_us() - last_log_us.load(std::memory_order_relaxed);
-                if (idle_us < 1200 * 1000) {
-                    continue;
-                }
-                const int64_t idle_sec = idle_us / 1'000'000;
-                if (idle_sec == last_print_sec) {
-                    continue;
-                }
-                last_print_sec = idle_sec;
-                idle_line_visible.store(true, std::memory_order_relaxed);
-                std::cerr << "\r    [client] waiting for remote output... (idle " << idle_sec << "s)";
-                std::cerr.flush();
-            }
-        });
-    }
-
-    auto print_log = [&](const std::string &data) {
-        if (data.empty()) {
-            return;
-        }
-        last_log_us.store(now_us(), std::memory_order_relaxed);
-        clear_idle_line();
-        if (!enable_progress) {
-            std::cout.write(data.data(), static_cast<std::streamsize>(data.size()));
-            std::cout.flush();
-            return;
-        }
-
-        // Fast path: insert a prefix at the beginning of each line.
-        static constexpr const char *kPrefix = "    [server] ";
-        std::string out;
-        out.reserve(data.size() + 32);
-
-        size_t pos = 0;
-        while (pos < data.size()) {
-            if (log_line_start) {
-                out.append(kPrefix);
-                log_line_start = false;
-            }
-            const size_t newline = data.find('\n', pos);
-            if (newline == std::string::npos) {
-                out.append(data, pos, std::string::npos);
-                break;
-            }
-            out.append(data, pos, newline - pos + 1);
-            log_line_start = true;
-            pos = newline + 1;
-        }
-
-        std::cout.write(out.data(), static_cast<std::streamsize>(out.size()));
-        std::cout.flush();
-    };
-
-    while (stream->Read(&response)) {
-        if (response.has_log_chunk()) {
-            const std::string &data = response.log_chunk().data();
-            print_log(data);
-        } else if (response.has_result()) {
-            final_result = response.result();
-        }
-    }
-
-    stop_idle.store(true, std::memory_order_relaxed);
-    if (idle_thread.joinable()) {
-        idle_thread.join();
-    }
-    clear_idle_line();
+    DrainServerResponses(stream.get(), enable_progress, enable_pty, &final_result);
 
     grpc::Status status = stream->Finish();
 
     gettimeofday(&end, nullptr);
     report->elapsed_seconds = (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec) / 1'000'000.0;
-    report->bytes_sent = total_bytes;
+    report->bytes_sent = progress.bytes_sent;
     report->response = final_result;
 
     if (!status.ok()) {
+        if (final_result.status() == remote_service::kFailed && !final_result.message().empty()) {
+            return grpc::Status(status.error_code(), final_result.message());
+        }
         return status;
     }
-    if (write_failed) {
-        return grpc::Status(grpc::StatusCode::ABORTED, "Failed to stream file contents to the server.");
+    if (!upload_status.ok()) {
+        return upload_status;
     }
 
     return grpc::Status::OK;

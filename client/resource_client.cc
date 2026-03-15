@@ -15,12 +15,16 @@ struct ResourceRequest {
     int core_req = -1;
 };
 
+void PrintUsage(const char *prog_name) {
+    std::cerr << "Usage: " << prog_name
+              << " --controller=<host:port> --type=<resource_type> --count=<resource_count>"
+                 " [--mem=<mem_req>] [--cores=<core_req>]"
+              << std::endl;
+}
+
 bool ParseArguments(int argc, char **argv, ResourceRequest *req) {
     if (argc < 4) {
-        std::cerr << "Usage: " << argv[0]
-                  << " --controller=<host:port> --type=<resource_type> --count=<resource_count>"
-                     " [--mem=<mem_req>] [--cores=<core_req>]"
-                  << std::endl;
+        PrintUsage(argv[0]);
         return false;
     }
 
@@ -59,6 +63,7 @@ bool ParseArguments(int argc, char **argv, ResourceRequest *req) {
             }
         } else {
             LOG(ERROR) << "Unknown argument: " << arg;
+            PrintUsage(argv[0]);
             return false;
         }
     }
@@ -103,26 +108,20 @@ bool CheckStep(const std::string &step_name, const brpc::Controller &cntl, const
     return true;
 }
 
-int main(int argc, char **argv) {
-    ResourceRequest req;
-    if (!ParseArguments(argc, argv, &req)) {
-        return -1;
-    }
-
-    brpc::Channel channel;
+bool InitializeControllerChannel(const ResourceRequest &req, brpc::Channel *channel) {
     brpc::ChannelOptions options;
     options.protocol = "baidu_std";
     options.timeout_ms = 5000;
     options.max_retry = 3;
 
-    if (channel.Init(req.controller_addr.c_str(), "", &options) != 0) {
+    if (channel->Init(req.controller_addr.c_str(), "", &options) != 0) {
         LOG(ERROR) << "Init Channel Failed";
-        return -1;
+        return false;
     }
+    return true;
+}
 
-    hcp::ResourceControlService_Stub stub(&channel);
-
-    // Step 1: apply for resource.
+bool ApplyResource(hcp::ResourceControlService_Stub *stub, const ResourceRequest &req, std::string *task_id_out) {
     hcp::ApplyResourceRequest apply_req;
     hcp::ApplyResourceResponse apply_res;
     brpc::Controller cntl1;
@@ -134,28 +133,30 @@ int main(int argc, char **argv) {
     if (req.core_req > 0) {
         apply_req.set_corereq(req.core_req);
     }
-    stub.apply_resource(&cntl1, &apply_req, &apply_res, nullptr);
+    stub->apply_resource(&cntl1, &apply_req, &apply_res, nullptr);
 
     if (!CheckStep("apply_resource", cntl1, apply_res.status())) {
-        return -1;
+        return false;
     }
 
-    std::string task_id = apply_res.task_id();
-    LOG(INFO) << "Apply success, task_id = " << task_id;
+    *task_id_out = apply_res.task_id();
+    LOG(INFO) << "Apply success, task_id = " << *task_id_out;
+    return true;
+}
 
-    // Step 2: query resource details.
+bool QueryResource(hcp::ResourceControlService_Stub *stub, const std::string &task_id, hcp::QueryResourceResponse *query_res) {
     hcp::QueryResourceRequest query_req;
-    hcp::QueryResourceResponse query_res;
-
     brpc::Controller cntl2;
     query_req.set_task_id(task_id);
-    stub.query_resource(&cntl2, &query_req, &query_res, nullptr);
+    stub->query_resource(&cntl2, &query_req, query_res, nullptr);
 
-    if (!CheckStep("query_resource", cntl2, query_res.status())) {
-        return -1;
+    if (!CheckStep("query_resource", cntl2, query_res->status())) {
+        return false;
     }
+    return true;
+}
 
-    // Step 3: print node addresses.
+void PrintAllocatedResources(const hcp::QueryResourceResponse &query_res) {
     for (int i = 0; i < query_res.rinfos_size(); ++i) {
         const hcp::ResourceInfo &info = query_res.rinfos(i);
         if (info.has_node()) {
@@ -165,6 +166,33 @@ int main(int argc, char **argv) {
                       << ", Port=" << node.port() << std::endl;
         }
     }
+}
 
+int RunResourceClient(const ResourceRequest &req) {
+    brpc::Channel channel;
+    if (!InitializeControllerChannel(req, &channel)) {
+        return -1;
+    }
+
+    hcp::ResourceControlService_Stub stub(&channel);
+    std::string task_id;
+    if (!ApplyResource(&stub, req, &task_id)) {
+        return -1;
+    }
+
+    hcp::QueryResourceResponse query_res;
+    if (!QueryResource(&stub, task_id, &query_res)) {
+        return -1;
+    }
+
+    PrintAllocatedResources(query_res);
     return 0;
+}
+
+int main(int argc, char **argv) {
+    ResourceRequest req;
+    if (!ParseArguments(argc, argv, &req)) {
+        return -1;
+    }
+    return RunResourceClient(req);
 }
