@@ -1,8 +1,9 @@
-/tools
-/third_party
 /build
+/.cache
 /.vscode
-/3rdparty
-worklog.md
+/compile_commands.json
 /workspace
 /result
+/worklog.md
+/3rdparty/build
+/3rdparty/install

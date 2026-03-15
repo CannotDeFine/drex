@@ -1,32 +1,81 @@
 cmake_minimum_required(VERSION 3.16)
 
 project(RemoteService C CXX)
-set(CMAKE_PREFIX_PATH "/usr/local") 
+set(RPC_THIRD_PARTY_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/install" CACHE PATH "Private prefix where bundled third-party dependencies are installed")
+if(EXISTS "${RPC_THIRD_PARTY_PREFIX}")
+    list(PREPEND CMAKE_PREFIX_PATH "${RPC_THIRD_PARTY_PREFIX}")
+endif()
+list(APPEND CMAKE_PREFIX_PATH "/usr/local")
+
+set(_THIRD_PARTY_INCLUDE_HINTS
+    "${RPC_THIRD_PARTY_PREFIX}/include"
+)
+set(_THIRD_PARTY_LIBRARY_HINTS
+    "${RPC_THIRD_PARTY_PREFIX}/lib"
+    "${RPC_THIRD_PARTY_PREFIX}/lib64"
+)
+
+set(CMAKE_BUILD_RPATH "${RPC_THIRD_PARTY_PREFIX}/lib;${RPC_THIRD_PARTY_PREFIX}/lib64")
+set(CMAKE_INSTALL_RPATH "${RPC_THIRD_PARTY_PREFIX}/lib;${RPC_THIRD_PARTY_PREFIX}/lib64")
 
 # Dependencies
 # system_libaries
 # find_package(CURL REQUIRED)
-find_package(gRPC REQUIRED)
-find_package(Protobuf REQUIRED)
+find_package(Protobuf CONFIG QUIET)
+if(NOT Protobuf_FOUND)
+    find_package(Protobuf REQUIRED)
+endif()
+find_package(gRPC CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
-find_package(absl REQUIRED)
+find_package(absl CONFIG REQUIRED)
+
+set(PROTOBUF_LIB_TARGET protobuf::libprotobuf)
+if(NOT TARGET protobuf::libprotobuf)
+    if(TARGET protobuf::protobuf)
+        set(PROTOBUF_LIB_TARGET protobuf::protobuf)
+    elseif(DEFINED Protobuf_LIBRARIES)
+        set(PROTOBUF_LIB_TARGET ${Protobuf_LIBRARIES})
+    else()
+        message(FATAL_ERROR "Protobuf was found, but no usable protobuf library target is available.")
+    endif()
+endif()
 
 # find brpc
-find_path(BRPC_INCLUDE_PATH brpc/server.h)
-find_library(BRPC_LIB NAMES brpc libbrpc.a)
+find_path(BRPC_INCLUDE_PATH brpc/server.h HINTS ${_THIRD_PARTY_INCLUDE_HINTS})
+find_library(BRPC_LIB NAMES brpc libbrpc.a HINTS ${_THIRD_PARTY_LIBRARY_HINTS})
 # find gflags
-find_path(GFLAGS_INCLUDE_PATH gflags/gflags.h)
-find_library(GFLAGS_LIBRARY NAMES gflags libgflags)
+find_path(GFLAGS_INCLUDE_PATH gflags/gflags.h HINTS ${_THIRD_PARTY_INCLUDE_HINTS})
+find_library(GFLAGS_LIBRARY NAMES gflags libgflags HINTS ${_THIRD_PARTY_LIBRARY_HINTS})
 # find levledb
-find_path(LEVELDB_INCLUDE_PATH NAMES leveldb/db.h)
-find_library(LEVELDB_LIB NAMES leveldb)
+find_path(LEVELDB_INCLUDE_PATH NAMES leveldb/db.h HINTS ${_THIRD_PARTY_INCLUDE_HINTS})
+find_library(LEVELDB_LIB NAMES leveldb HINTS ${_THIRD_PARTY_LIBRARY_HINTS})
 
 
 # find grpc_cpp_plugin
-find_program(_GRPC_CPP_PLUGIN_EXECUTABLE grpc_cpp_plugin)
+find_program(_GRPC_CPP_PLUGIN_EXECUTABLE grpc_cpp_plugin HINTS "${RPC_THIRD_PARTY_PREFIX}/bin")
 # find protoc
-find_program(_PROTOBUF_PROTOC protoc)
+find_program(_PROTOBUF_PROTOC protoc HINTS "${RPC_THIRD_PARTY_PREFIX}/bin")
+
+if(NOT BRPC_INCLUDE_PATH OR NOT BRPC_LIB)
+    message(FATAL_ERROR "bRPC was not found. Build dependencies with ./scripts/build_deps.sh or set RPC_THIRD_PARTY_PREFIX.")
+endif()
+
+if(NOT GFLAGS_INCLUDE_PATH OR NOT GFLAGS_LIBRARY)
+    message(FATAL_ERROR "gflags was not found. Install it system-wide or into ${RPC_THIRD_PARTY_PREFIX}.")
+endif()
+
+if(NOT LEVELDB_INCLUDE_PATH OR NOT LEVELDB_LIB)
+    message(FATAL_ERROR "leveldb was not found. Install it system-wide or into ${RPC_THIRD_PARTY_PREFIX}.")
+endif()
+
+if(NOT _GRPC_CPP_PLUGIN_EXECUTABLE)
+    message(FATAL_ERROR "grpc_cpp_plugin was not found. Build dependencies with ./scripts/build_deps.sh.")
+endif()
+
+if(NOT _PROTOBUF_PROTOC)
+    message(FATAL_ERROR "protoc was not found. Build dependencies with ./scripts/build_deps.sh.")
+endif()
 
 # generate source and header 
 # remote_service
@@ -61,13 +110,23 @@ add_custom_command(
     DEPENDS "${resource_control_proto}"
 )
 
+add_library(project_options INTERFACE)
+target_compile_features(project_options INTERFACE cxx_std_17)
 
-include_directories("${CMAKE_CURRENT_BINARY_DIR}")
-include_directories("${remote_proto_path}")
-include_directories("${resource_control_path}")
-include_directories("${BRPC_INCLUDE_PATH}")
-include_directories("${GFLAGS_INCLUDE_PATH}")
-include_directories("${LEVELDB_INCLUDE_PATH}")
+add_library(project_paths INTERFACE)
+# Generated protobuf headers live in the build directory, while local imports stay under proto/.
+target_include_directories(project_paths INTERFACE
+    "${CMAKE_CURRENT_BINARY_DIR}"
+    "${remote_proto_path}"
+    "${resource_control_path}"
+)
+# Vendor and external library headers are marked as system headers to keep warnings focused on this repo.
+target_include_directories(project_paths SYSTEM INTERFACE
+    "${BRPC_INCLUDE_PATH}"
+    "${GFLAGS_INCLUDE_PATH}"
+    "${LEVELDB_INCLUDE_PATH}"
+    "${RPC_THIRD_PARTY_PREFIX}/include"
+)
 
 set(ABSL_LIBRARIES
     absl::absl_check
@@ -117,22 +176,27 @@ add_library(remote_grpc_proto
     ${remote_proto_hdrs}
 )
 target_link_libraries(remote_grpc_proto
-    gRPC::grpc++
-    protobuf::libprotobuf
-    gRPC::grpc++_reflection
+    PUBLIC
+        project_options
+        project_paths
+        gRPC::grpc++
+        ${PROTOBUF_LIB_TARGET}
+        gRPC::grpc++_reflection
 )
 
-# server 
+# server
 add_executable(remote_server
     server/server.cc
     server/remote_service_implement.cc
     server/task_executor.cc
 )
 target_link_libraries(remote_server
-    remote_grpc_proto
-    
-    ${ABSL_LIBRARIES}
-    util
+    PRIVATE
+        project_options
+        project_paths
+        remote_grpc_proto
+        ${ABSL_LIBRARIES}
+        util
 )
 
 # client
@@ -141,15 +205,18 @@ add_executable(remote_client
     client/client_api.cc
 )
 target_link_libraries(remote_client
-    remote_grpc_proto
-    ${ABSL_LIBRARIES}
+    PRIVATE
+        project_options
+        project_paths
+        remote_grpc_proto
+        ${ABSL_LIBRARIES}
 )
 
 # resource client
 set(BRPC_DEPS
     ${CMAKE_THREAD_LIBS_INIT}
     ${GFLAGS_LIBRARY}
-    ${PROTOBUF_LIBRARIES}
+    ${PROTOBUF_LIB_TARGET}
     ${LEVELDB_LIB}
     ${OPENSSL_CRYPTO_LIBRARY}
     ${OPENSSL_SSL_LIBRARY}
@@ -161,20 +228,26 @@ add_executable(resource_client
     ${resource_control_proto_srcs}
 )
 target_link_libraries(resource_client
-    ${BRPC_LIB}
-    ${BRPC_DEPS}
-    ${ABSL_LIBRARIES}
+    PRIVATE
+        project_options
+        project_paths
+        ${BRPC_LIB}
+        ${BRPC_DEPS}
+        ${ABSL_LIBRARIES}
 )
 
-add_executable(intergrated_client
-    client/intergrated_client.cc
+add_executable(integrated_client
+    client/integrated_client.cc
     client/client_api.cc
     ${resource_control_proto_hdrs}
     ${resource_control_proto_srcs}
 )
-target_link_libraries(intergrated_client
-    remote_grpc_proto
-    ${BRPC_LIB}
-    ${BRPC_DEPS}
-    ${ABSL_LIBRARIES}
+target_link_libraries(integrated_client
+    PRIVATE
+        project_options
+        project_paths
+        remote_grpc_proto
+        ${BRPC_LIB}
+        ${BRPC_DEPS}
+        ${ABSL_LIBRARIES}
 )

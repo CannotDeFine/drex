@@ -1,0 +1,11 @@
+[submodule "3rdparty/protobuf"]
+	path = 3rdparty/protobuf
+	url = https://github.com/protocolbuffers/protobuf.git
+	branch = v3.25.7
+[submodule "3rdparty/grpc"]
+	path = 3rdparty/grpc
+	url = https://github.com/grpc/grpc.git
+	branch = v1.74.0
+[submodule "3rdparty/brpc"]
+	path = 3rdparty/brpc
+	url = https://github.com/apache/brpc.git

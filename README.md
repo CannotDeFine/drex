@@ -8,33 +8,36 @@ It provides:
 - `remote_server` (gRPC): accepts a streamed upload, runs a command on the server, and returns a `tar.gz` of the output directory.
 - `remote_client` (gRPC): uploads a local directory, streams server logs to stdout, then extracts the returned output archive locally.
 - `resource_client` (bRPC): talks to a resource controller to apply/query resources and prints node endpoints.
-- `intergrated_client` (bRPC + gRPC): applies for resources via the controller, then submits the task to the returned node.
+- `integrated_client` (bRPC + gRPC): applies for resources via the controller, then submits the task to the returned node.
 
 ## Build prerequisites
 
-This repo is built with CMake and links against system-installed dependencies:
+This repo vendors its main RPC dependencies as git submodules under `3rdparty/` and installs them into a private prefix at `3rdparty/install`.
 
-- Protobuf (`protoc`)
-- gRPC (C++), plus `grpc_cpp_plugin`
-- Abseil (`absl`)
-- bRPC (and its deps: gflags, leveldb, OpenSSL, etc.)
-- System libs: Threads, OpenSSL, CURL
+You still need a basic native toolchain and a few system libraries for bRPC:
 
-The CMake config defaults `CMAKE_PREFIX_PATH` to `/usr/local` (see [CMakeLists.txt](CMakeLists.txt)).
+- CMake
+- a C/C++ compiler
+- OpenSSL development files
+- gflags development files
+- leveldb development files
 
-For example installation steps (protobuf / gRPC / bRPC), see [usage.md](usage.md).
+The project build defaults to `3rdparty/install`, but you can override that with `RPC_THIRD_PARTY_PREFIX=/path/to/prefix`.
 
 ## Build
 
 From the repo root:
 
 ```bash
+git submodule update --init --recursive
+./scripts/build_deps.sh
 ./compile.sh
 ```
 
 Notes:
 
 - `compile.sh` recreates `build/` each time.
+- `compile.sh` exports `compile_commands.json` for editors and clangd.
 - The build is `Release` with `-std=c++17`.
 
 After build, binaries are in `build/`:
@@ -42,7 +45,7 @@ After build, binaries are in `build/`:
 - `build/remote_server`
 - `build/remote_client`
 - `build/resource_client`
-- `build/intergrated_client`
+- `build/integrated_client`
 
 ## Quick start
 
@@ -103,14 +106,14 @@ Outputs:
 
 It prints the returned nodes as `IP` and `Port`.
 
-### 4) Apply resources and submit a task with `intergrated_client`
+### 4) Apply resources and submit a task with `integrated_client`
 
-`intergrated_client` supports **positional arguments** (legacy) or a **--key=value** style.
+`integrated_client` supports **positional arguments** (legacy) or a **--key=value** style.
 
 Positional arguments:
 
 ```bash
-./build/intergrated_client \
+./build/integrated_client \
   <controller_addr(host:port)> \
   <src_dir> \
   <workspace_subdir> \
@@ -124,7 +127,7 @@ Positional arguments:
 Flags style (defaults: `--count=1`, `--local_output_dir=.`):
 
 ```bash
-./build/intergrated_client \
+./build/integrated_client \
   --controller=<host:port> \
   --src_dir=<dir> \
   --workspace_subdir=<name> \
@@ -136,7 +139,7 @@ Flags style (defaults: `--count=1`, `--local_output_dir=.`):
 Example:
 
 ```bash
-./build/intergrated_client \
+./build/integrated_client \
   controller_host:port \
   /path/to/local/workspace \
   uploaded_task \
@@ -148,7 +151,7 @@ Example:
 
 Output behavior:
 
-- `intergrated_client` saves the server archive as `server_output.tar.gz` under `<local_output_dir>`.
+- `integrated_client` saves the server archive as `server_output.tar.gz` under `<local_output_dir>`.
 - It also extracts that archive locally using `tar` into `<local_output_dir>`.
   - If the server does not return an output archive, it will only stream terminal output and exit successfully.
 
@@ -170,7 +173,6 @@ Protobuf notes are in [tools/proto.md](tools/proto.md).
 
 ## Troubleshooting
 
-- **CMake cannot find gRPC/Protobuf/absl**: ensure they are installed where CMake can find them (default search path is `/usr/local`).
-- **`grpc_cpp_plugin` or `protoc` not found**: make sure they are in `PATH`.
+- **CMake cannot find gRPC/Protobuf/absl**: rebuild the private prefix with `./scripts/build_deps.sh`, or point `RPC_THIRD_PARTY_PREFIX` at a complete dependency install tree.
+- **`grpc_cpp_plugin` or `protoc` not found**: make sure `./scripts/build_deps.sh` completed successfully and that `compile.sh` is using the same `RPC_THIRD_PARTY_PREFIX`.
 - **Client extraction fails**: `remote_client` uses the system `tar` command to extract the returned archive (`tar -xzf - -C ...`).
-

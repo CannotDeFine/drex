@@ -17,8 +17,6 @@
 
 using grpc::Server;
 using grpc::ServerBuilder;
-using grpc::ServerContext;
-using grpc::Status;
 
 // Server listens on all available interfaces.
 ABSL_FLAG(uint16_t, port, 8063, "Server port for the service");
