@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <csignal>
 #include <thread>
 
 #include <unistd.h>
@@ -41,6 +42,53 @@ std::string HumanReadableBytes(int64_t bytes) {
     }
     return oss.str();
 }
+
+std::atomic<bool> g_client_interrupt_requested{false};
+
+extern "C" void HandleClientInterrupt(int signo) {
+    if (signo == SIGINT) {
+        g_client_interrupt_requested.store(true, std::memory_order_relaxed);
+    }
+}
+
+class ScopedClientCancellation {
+  public:
+    explicit ScopedClientCancellation(grpc::ClientContext *context) : context_(context) {
+        g_client_interrupt_requested.store(false, std::memory_order_relaxed);
+
+        struct sigaction action {};
+        action.sa_handler = HandleClientInterrupt;
+        sigemptyset(&action.sa_mask);
+        sigaction(SIGINT, &action, &previous_action_);
+
+        if (context_ != nullptr) {
+            watcher_ = std::thread([this]() {
+                while (!stop_.load(std::memory_order_relaxed)) {
+                    if (g_client_interrupt_requested.load(std::memory_order_relaxed)) {
+                        LogClientWarn("interrupt received, cancelling remote task");
+                        context_->TryCancel();
+                        return;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                }
+            });
+        }
+    }
+
+    ~ScopedClientCancellation() {
+        stop_.store(true, std::memory_order_relaxed);
+        if (watcher_.joinable()) {
+            watcher_.join();
+        }
+        sigaction(SIGINT, &previous_action_, nullptr);
+    }
+
+  private:
+    grpc::ClientContext *context_ = nullptr;
+    struct sigaction previous_action_ {};
+    std::atomic<bool> stop_{false};
+    std::thread watcher_;
+};
 
 struct UploadProgress {
     int64_t bytes_sent = 0;
@@ -192,13 +240,17 @@ void DrainServerResponses(TaskStream *stream, bool enable_progress, bool raw_ter
         }
 
         static constexpr const char *kPrefix = "[From server] ";
+        static constexpr const char *kRawPrefix = "[From server] ";
         std::string out;
         out.reserve(data.size() + 32);
 
         size_t pos = 0;
         while (pos < data.size()) {
             if (log_line_start) {
-                out.append(kPrefix);
+                const bool already_prefixed = data.compare(pos, std::char_traits<char>::length(kRawPrefix), kRawPrefix) == 0;
+                if (!already_prefixed) {
+                    out.append(kPrefix);
+                }
                 log_line_start = false;
             }
             const size_t newline = data.find('\n', pos);
@@ -316,6 +368,7 @@ grpc::Status RemoteServiceClient::TaskSubmit(const std::vector<UploadFileSpec> &
     const std::string effective_output_subdir = (fs::path(workspace_subdir) / "output").generic_string();
 
     grpc::ClientContext context;
+    ScopedClientCancellation cancellation(&context);
     std::shared_ptr<TaskStream> stream(stub_->TaskSubmission(&context));
 
     timeval start, end;
