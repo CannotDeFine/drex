@@ -21,6 +21,11 @@ struct UploadStats {
     int64_t total_bytes = 0;
 };
 
+struct XSchedConfig {
+    bool enabled = false;
+    int xsched_utilization = -1;
+};
+
 bool CollectDirectoryFiles(const std::string &root_dir, std::vector<UploadFileSpec> *files);
 bool ComputeUploadStats(const std::vector<UploadFileSpec> &files, UploadStats *stats);
 grpc::Status ValidateUploadFiles(const std::vector<UploadFileSpec> &files);
@@ -36,7 +41,8 @@ class RemoteServiceClient {
     };
 
     grpc::Status TaskSubmit(const std::vector<UploadFileSpec> &files, const std::string &workspace_subdir, const std::string &command,
-                            TaskSubmitReport *report, const UploadStats *upload_stats = nullptr, bool enable_pty = false);
+                            TaskSubmitReport *report, const UploadStats *upload_stats = nullptr, bool enable_pty = false,
+                            const XSchedConfig *xsched_config = nullptr);
 
   private:
     std::unique_ptr<remote_service::TaskManage::Stub> stub_;

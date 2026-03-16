@@ -1,6 +1,3 @@
-/*
-*  Created a server application that hosts a gRPC service.
-*/
 #include <absl/flags/flag.h>
 #include <absl/flags/parse.h>
 #include <absl/log/initialize.h>
@@ -19,7 +16,7 @@
 using grpc::Server;
 using grpc::ServerBuilder;
 
-// Server listens on all available interfaces.
+// Bind address for the remote execution service.
 ABSL_FLAG(uint16_t, port, 8063, "Server port for the service");
 ABSL_FLAG(std::string, address, "0.0.0.0", "Server address");
 
@@ -29,6 +26,8 @@ void RunServer(const std::string &address, uint16_t port) {
 
     RemoteServiceImplement service;
 
+    // Keep bootstrap logic minimal here; request handling lives in
+    // RemoteServiceImplement and TaskExecutor.
     grpc::EnableDefaultHealthCheckService(true);
     grpc::reflection::InitProtoReflectionServerBuilderPlugin();
 

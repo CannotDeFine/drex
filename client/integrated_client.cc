@@ -34,25 +34,28 @@ struct ProgramOptions {
     int mem_req = -1;
     int core_req = -1;
     bool pty = false;
+    XSchedConfig xsched;
 };
 
 void PrintUsage(const char *prog_name) {
     std::cerr << "Usage: " << prog_name
               << " <controller_addr(host:port)> <src_dir> <workspace_subdir> <command> <local_output_dir> <resource_type> <resource_count>"
-                 " [--mem=<mem_req>] [--cores=<core_req>] [--pty]"
+                 " [--mem=<mem_req>] [--cores=<core_req>] [--pty] [--xsched_utilization=<0-100>]"
               << "\n   or: " << prog_name
               << " --controller=<host:port> --src_dir=<dir> --workspace_subdir=<name> --command=<cmd> --type=<resource_type>"
                  " [--count=<n>] [--local_output_dir=<dir>] [--mem=<mem_req>] [--cores=<core_req>] [--pty]"
+                 " [--xsched_utilization=<0-100>]"
               << std::endl;
 }
 
-// 解析并校验命令行参数
 bool ParseArguments(int argc, char **argv, ProgramOptions *opts) {
     if (argc < 2) {
         PrintUsage(argv[0]);
         return false;
     }
 
+    // Keep both the original positional form and the newer flag form so the
+    // client remains compatible with existing scripts.
     const bool flag_mode = std::string(argv[1]).rfind("--", 0) == 0;
     if (!flag_mode) {
         if (argc < 8) {
@@ -152,6 +155,17 @@ bool ParseArguments(int argc, char **argv, ProgramOptions *opts) {
                 continue;
             }
 
+            const std::string util_prefix = "--xsched_utilization=";
+            if (arg.rfind(util_prefix, 0) == 0) {
+                try {
+                    opts->xsched.xsched_utilization = std::stoi(arg.substr(util_prefix.size()));
+                } catch (const std::exception &ex) {
+                    std::cerr << "Invalid --xsched_utilization value: " << ex.what() << std::endl;
+                    return false;
+                }
+                continue;
+            }
+
             std::cerr << "Unknown argument: " << arg << std::endl;
             PrintUsage(argv[0]);
             return false;
@@ -186,6 +200,12 @@ bool ParseArguments(int argc, char **argv, ProgramOptions *opts) {
         std::cerr << "--mem/--cores must be positive integers when provided." << std::endl;
         return false;
     }
+
+    if (opts->xsched.xsched_utilization < -1 || opts->xsched.xsched_utilization > 100) {
+        std::cerr << "--xsched_utilization must be in [0, 100]." << std::endl;
+        return false;
+    }
+    opts->xsched.enabled = opts->xsched.xsched_utilization >= 0;
 
     return true;
 }
@@ -262,7 +282,8 @@ NodeInfo ApplyResourceAndGetNode(const std::string &controller_addr, const std::
 
     hcp::ResourceControlService_Stub stub(&channel);
 
-    // step 1: 申请资源
+    // First reserve resources, then query the controller for the concrete node
+    // that should receive the uploaded workload.
     hcp::ApplyResourceRequest apply_request;
     hcp::ApplyResourceResponse apply_response;
     brpc::Controller apply_cntl;
@@ -285,7 +306,6 @@ NodeInfo ApplyResourceAndGetNode(const std::string &controller_addr, const std::
         *task_id_out = task_id;
     }
 
-    // step 2: 查询资源分配结果
     hcp::QueryResourceRequest query_request;
     hcp::QueryResourceResponse query_response;
     brpc::Controller query_cntl;
@@ -326,6 +346,9 @@ bool PrepareWorkspace(const ProgramOptions &opts, std::vector<UploadFileSpec> *f
     }
 
     LogClientInfo("workspace ready: " + std::to_string(stats->file_count) + " files, total " + FormatBytes(stats->total_bytes));
+    if (opts.xsched.enabled) {
+        LogClientInfo("xsched enabled: utilization=" + std::to_string(opts.xsched.xsched_utilization));
+    }
     return true;
 }
 
@@ -336,12 +359,13 @@ std::string FormatNodeTarget(const NodeInfo &node) {
     return node.ip + ":" + std::to_string(node.port);
 }
 
-// 将任务打包上传到执行节点，并获取执行结果
 int ExecuteTask(const std::string &target, const std::vector<UploadFileSpec> &files, const UploadStats &stats, const std::string &workspace_subdir,
-                const std::string &command, bool enable_pty) {
+                const std::string &command, bool enable_pty, const XSchedConfig *xsched_config) {
+    // Resource allocation chooses the node, but execution still goes through
+    // the same remote execution client used by remote_client.
     RemoteServiceClient client(grpc::CreateChannel(target, grpc::InsecureChannelCredentials()));
     RemoteServiceClient::TaskSubmitReport report;
-    grpc::Status status = client.TaskSubmit(files, workspace_subdir, command, &report, &stats, enable_pty);
+    grpc::Status status = client.TaskSubmit(files, workspace_subdir, command, &report, &stats, enable_pty, xsched_config);
     if (!status.ok()) {
         PrintStageFailure(3, "RPC failed during upload/execution: " + status.error_message());
         return 1;
@@ -369,11 +393,13 @@ int RunIntegratedClient(const ProgramOptions &opts) {
     LogClientInfo("applying resources from controller");
 
     std::string task_id;
+    // The integrated client is a thin orchestration layer: reserve resources,
+    // submit the task to the chosen node, then release the reservation.
     const NodeInfo node = ApplyResourceAndGetNode(opts.controller_addr, opts.resource_type, opts.resource_count, opts.mem_req, opts.core_req, &task_id);
     const std::string target = FormatNodeTarget(node);
     LogClientInfo("uploading workspace and executing on " + target);
 
-    const int rc = ExecuteTask(target, files, stats, opts.workspace_subdir, opts.command, opts.pty);
+    const int rc = ExecuteTask(target, files, stats, opts.workspace_subdir, opts.command, opts.pty, &opts.xsched);
     if (!ReleaseResource(opts.controller_addr, task_id)) {
         LogClientWarn("failed to release allocated resources for task " + task_id);
     }

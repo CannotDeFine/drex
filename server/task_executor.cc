@@ -119,6 +119,8 @@ std::string BuildCommandForExecution(const std::string &command, bool want_pty) 
         return command;
     }
 
+    // In pipe mode, stdbuf keeps common CLI tools line-buffered so output
+    // reaches the client sooner without requiring PTY mode.
     const std::string stdbuf_path = FindCommandInPath("stdbuf");
     if (stdbuf_path == "<not found>" || stdbuf_path == "<PATH unset>") {
         return command;
@@ -134,6 +136,22 @@ void ConfigureChildEnvironment(bool want_pty) {
     }
 }
 
+void ConfigureXSchedEnvironment(const remote_service::TaskConfig &config) {
+    if (!config.xsched_enabled()) {
+        return;
+    }
+
+    // Remote tasks should register with the global xsched server. Global
+    // policy and timeslice belong to xserver; the task only contributes its
+    // per-xqueue utilization hint.
+    setenv("XSCHED_SCHEDULER", "GLB", 1);
+    setenv("XSCHED_AUTO_XQUEUE", "ON", 1);
+    unsetenv("XSCHED_POLICY");
+    if (config.xsched_utilization() >= 0) {
+        setenv("XSCHED_AUTO_XQUEUE_UTILIZATION", std::to_string(config.xsched_utilization()).c_str(), 1);
+    }
+}
+
 } // namespace
 
 TaskExecutor::TaskExecutor(grpc::ServerContext *context, const remote_service::TaskConfig &config, const fs::path &workspace_root,
@@ -146,8 +164,8 @@ grpc::Status TaskExecutor::Execute(remote_service::TaskResult *result) const {
     }
 
     fs::path run_dir = (workspace_root_ / config_.workspace_subdir()).lexically_normal();
-    // NOTE: We intentionally do not create/archive output_subdir anymore.
-    // This server is configured to only stream terminal output back to the client.
+    // The current server model only streams terminal output; it does not
+    // archive task artifacts back to the client.
 
     std::error_code ec;
     fs::create_directories(run_dir, ec);
@@ -166,7 +184,7 @@ grpc::Status TaskExecutor::Execute(remote_service::TaskResult *result) const {
         return run_status;
     }
 
-    EmitLogChunk("\nCommand finished. (output archive disabled)\n");
+    EmitLogChunk("Command finished.\n");
 
     result->set_status(remote_service::kSuccess);
     result->set_message("Task executed successfully.");
@@ -194,7 +212,10 @@ grpc::Status TaskExecutor::StartChildProcess(ChildProcess *child) const {
         }
         if (pid == 0) {
             (void)setpgid(0, 0);
+            // Put the task in its own process group so cancellation and timeout
+            // can terminate the whole tree with killpg().
             ConfigureChildEnvironment(true);
+            ConfigureXSchedEnvironment(config_);
             if (chdir((workspace_root_ / config_.workspace_subdir()).c_str()) != 0) {
                 _exit(127);
             }
@@ -227,7 +248,10 @@ grpc::Status TaskExecutor::StartChildProcess(ChildProcess *child) const {
     }
     if (pid == 0) {
         (void)setpgid(0, 0);
+        // Put the task in its own process group so cancellation and timeout can
+        // terminate the whole tree with killpg().
         ConfigureChildEnvironment(false);
+        ConfigureXSchedEnvironment(config_);
         if (chdir((workspace_root_ / config_.workspace_subdir()).c_str()) != 0) {
             _exit(127);
         }
@@ -265,15 +289,10 @@ grpc::Status TaskExecutor::MonitorChildProcess(const ChildProcess &child, std::s
     std::atomic<bool> cancelled{false};
 
     const int idle_timeout_ms = ParseEnvMillis("RPC_WORK_IDLE_TIMEOUT_MS", -1);
-    const int idle_log_every_ms = 1000;
-    const int startup_heartbeat_ms = 1000;
-    const int running_heartbeat_ms = 5000;
     auto last_output_tp = std::chrono::steady_clock::now();
-    auto last_idle_log_tp = last_output_tp;
-    auto start_tp = last_output_tp;
     bool saw_remote_output = false;
 
-    EmitLogChunk("[From server] command started, waiting for output...\n");
+    EmitLogChunk("[From server] Command started, waiting for output...\n");
 
     auto kill_child_group = [&](int sig) {
         (void)killpg(child.pid, sig);
@@ -290,6 +309,8 @@ grpc::Status TaskExecutor::MonitorChildProcess(const ChildProcess &child, std::s
             if (stop_cancel_thread.load(std::memory_order_relaxed)) {
                 return;
             }
+            // gRPC cancellation only aborts the RPC. The subprocess must be
+            // stopped explicitly on the server side.
             cancelled.store(true, std::memory_order_relaxed);
             kill_child_group(SIGTERM);
             usleep(2000 * 1000);
@@ -347,21 +368,6 @@ grpc::Status TaskExecutor::MonitorChildProcess(const ChildProcess &child, std::s
                                         "Hint: set RPC_WORK_IDLE_TIMEOUT_MS=-1 to disable, or increase it.");
                 }
 
-                const int since_last_log_ms =
-                    static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(now - last_idle_log_tp).count());
-                if (!saw_remote_output) {
-                    const int since_start_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(now - start_tp).count());
-                    if (since_last_log_ms >= startup_heartbeat_ms && since_start_ms >= startup_heartbeat_ms) {
-                        EmitLogChunk("[From server] command is running... (no output yet, " + std::to_string(since_start_ms / 1000) + "s)\n");
-                        last_idle_log_tp = now;
-                    }
-                } else if (idle_timeout_ms >= 0 && since_last_log_ms >= idle_log_every_ms && idle_ms >= idle_log_every_ms) {
-                    EmitLogChunk("waiting for task process to exit... (idle " + std::to_string(idle_ms / 1000) + "s)\n");
-                    last_idle_log_tp = now;
-                } else if (since_last_log_ms >= running_heartbeat_ms && idle_ms >= running_heartbeat_ms) {
-                    EmitLogChunk("[From server] command still running... (last output " + std::to_string(idle_ms / 1000) + "s ago)\n");
-                    last_idle_log_tp = now;
-                }
             } else {
                 const auto drain_ms =
                     std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - child_exit_tp).count();

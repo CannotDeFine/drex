@@ -12,6 +12,10 @@ message TaskConfig {
     string command = 2;
     string output_subdir = 3;
     bool enable_pty = 4;
+    bool xsched_enabled = 5;
+    string xsched_policy = 6;
+    int32 xsched_utilization = 7;
+    int64 xsched_timeslice_us = 8;
 }
 
 message TaskFileChunk {

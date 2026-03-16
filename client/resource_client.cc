@@ -28,6 +28,8 @@ bool ParseArguments(int argc, char **argv, ResourceRequest *req) {
         return false;
     }
 
+    // resource_client only exposes the explicit flag form because it is a thin
+    // controller utility rather than a full task submission entry point.
     for (int i = 1; i < argc; ++i) {
         std::string arg(argv[i]);
         const std::string controller_prefix = "--controller=";
@@ -139,6 +141,8 @@ bool ApplyResource(hcp::ResourceControlService_Stub *stub, const ResourceRequest
         return false;
     }
 
+    // The controller returns a task id first; concrete node allocation is
+    // retrieved in the follow-up query call.
     *task_id_out = apply_res.task_id();
     LOG(INFO) << "Apply success, task_id = " << *task_id_out;
     return true;
@@ -157,6 +161,8 @@ bool QueryResource(hcp::ResourceControlService_Stub *stub, const std::string &ta
 }
 
 void PrintAllocatedResources(const hcp::QueryResourceResponse &query_res) {
+    // Keep output intentionally simple so shell scripts can parse it without
+    // depending on client-side formatting libraries.
     for (int i = 0; i < query_res.rinfos_size(); ++i) {
         const hcp::ResourceInfo &info = query_res.rinfos(i);
         if (info.has_node()) {
@@ -174,6 +180,8 @@ int RunResourceClient(const ResourceRequest &req) {
         return -1;
     }
 
+    // This client is intentionally minimal: reserve resources, query the final
+    // allocation, then print the assigned nodes.
     hcp::ResourceControlService_Stub stub(&channel);
     std::string task_id;
     if (!ApplyResource(&stub, req, &task_id)) {

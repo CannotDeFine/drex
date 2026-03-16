@@ -56,6 +56,8 @@ class ScopedClientCancellation {
     explicit ScopedClientCancellation(grpc::ClientContext *context) : context_(context) {
         g_client_interrupt_requested.store(false, std::memory_order_relaxed);
 
+        // Mirror local Ctrl+C into the RPC so the server can cancel the remote
+        // task instead of leaving it running after the client exits.
         struct sigaction action {};
         action.sa_handler = HandleClientInterrupt;
         sigemptyset(&action.sa_mask);
@@ -116,13 +118,21 @@ struct UploadProgress {
 };
 
 bool SendTaskConfig(TaskStream *stream, const std::string &workspace_subdir, const std::string &command, const std::string &output_subdir,
-                    bool enable_pty) {
+                    bool enable_pty, const XSchedConfig *xsched_config) {
+    // The config message leads the stream so the server can resolve paths and
+    // prepare the workspace before file chunks start arriving.
     remote_service::TaskRequest config_request;
     auto *config = config_request.mutable_config();
     config->set_workspace_subdir(workspace_subdir);
     config->set_command(command);
     config->set_output_subdir(output_subdir);
     config->set_enable_pty(enable_pty);
+    if (xsched_config != nullptr && xsched_config->enabled) {
+        config->set_xsched_enabled(true);
+        if (xsched_config->xsched_utilization >= 0) {
+            config->set_xsched_utilization(xsched_config->xsched_utilization);
+        }
+    }
     return stream->Write(config_request);
 }
 
@@ -152,6 +162,8 @@ grpc::Status StreamWorkspaceFiles(TaskStream *stream, const std::vector<UploadFi
 
             remote_service::TaskRequest chunk_request;
             auto *chunk = chunk_request.mutable_file_chunk();
+            // The server rebuilds each file directly from stream metadata, so
+            // every chunk carries its relative path and file boundary flags.
             chunk->set_data(buffer.data(), bytes_read);
             chunk->set_relative_path(file.relative_path);
             chunk->set_file_start(first_chunk);
@@ -239,16 +251,35 @@ void DrainServerResponses(TaskStream *stream, bool enable_progress, bool raw_ter
             return;
         }
 
-        static constexpr const char *kPrefix = "[From server] ";
+        static constexpr const char *kPrefix = "\033[34m[From server]\033[0m ";
         static constexpr const char *kRawPrefix = "[From server] ";
+        static constexpr const char *kStagePrefix = "\033[34m[From server]\033[0m \033[33m";
+        static constexpr const char *kColorReset = "\033[0m";
         std::string out;
-        out.reserve(data.size() + 32);
+        out.reserve(data.size() + 64);
 
         size_t pos = 0;
         while (pos < data.size()) {
+            bool stage_line = false;
+            if (log_line_start && data[pos] == '\n') {
+                out.push_back('\n');
+                ++pos;
+                continue;
+            }
             if (log_line_start) {
+                // Server-generated status lines already include the prefix;
+                // task stdout/stderr lines do not.
                 const bool already_prefixed = data.compare(pos, std::char_traits<char>::length(kRawPrefix), kRawPrefix) == 0;
-                if (!already_prefixed) {
+                const bool completion_line = !already_prefixed &&
+                                             data.compare(pos, std::strlen("Command finished."), "Command finished.") == 0;
+                if (already_prefixed) {
+                    out.append(kStagePrefix);
+                    pos += std::char_traits<char>::length(kRawPrefix);
+                    stage_line = true;
+                } else if (completion_line) {
+                    out.append(kStagePrefix);
+                    stage_line = true;
+                } else {
                     out.append(kPrefix);
                 }
                 log_line_start = false;
@@ -256,9 +287,15 @@ void DrainServerResponses(TaskStream *stream, bool enable_progress, bool raw_ter
             const size_t newline = data.find('\n', pos);
             if (newline == std::string::npos) {
                 out.append(data, pos, std::string::npos);
+                if (stage_line) {
+                    out.append(kColorReset);
+                }
                 break;
             }
             out.append(data, pos, newline - pos + 1);
+            if (stage_line) {
+                out.append(kColorReset);
+            }
             log_line_start = true;
             pos = newline + 1;
         }
@@ -354,7 +391,8 @@ grpc::Status ValidateUploadFiles(const std::vector<UploadFileSpec> &files) {
 RemoteServiceClient::RemoteServiceClient(std::shared_ptr<grpc::Channel> channel) : stub_(remote_service::TaskManage::NewStub(channel)) {}
 
 grpc::Status RemoteServiceClient::TaskSubmit(const std::vector<UploadFileSpec> &files, const std::string &workspace_subdir, const std::string &command,
-                                             TaskSubmitReport *report, const UploadStats *upload_stats, bool enable_pty) {
+                                             TaskSubmitReport *report, const UploadStats *upload_stats, bool enable_pty,
+                                             const XSchedConfig *xsched_config) {
     if (files.empty()) {
         return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "No files specified for upload.");
     }
@@ -374,7 +412,7 @@ grpc::Status RemoteServiceClient::TaskSubmit(const std::vector<UploadFileSpec> &
     timeval start, end;
     gettimeofday(&start, nullptr);
 
-    if (!SendTaskConfig(stream.get(), workspace_subdir, command, effective_output_subdir, enable_pty)) {
+    if (!SendTaskConfig(stream.get(), workspace_subdir, command, effective_output_subdir, enable_pty, xsched_config)) {
         stream->WritesDone();
         stream->Finish();
         return grpc::Status(grpc::StatusCode::ABORTED, "Failed to send task configuration to the server.");

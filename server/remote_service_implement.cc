@@ -78,6 +78,8 @@ grpc::Status ResolveTaskPaths(const fs::path &workspace_root, const TaskConfig &
 
     const fs::path workspace_path = LexicallyNormalized(workspace_root, workspace_subdir);
     const fs::path output_path = LexicallyNormalized(workspace_root, output_subdir);
+    // Reject any path that escapes the dedicated server workspace, even if the
+    // client sends "../" components.
     if (!IsSubPath(workspace_root, workspace_path) || !IsSubPath(workspace_root, output_path)) {
         return grpc::Status(grpc::StatusCode::PERMISSION_DENIED, "Workspace or output directory escapes server workspace!");
     }
@@ -159,6 +161,8 @@ void WorkspaceLockGuard::Cleanup() {
     if (!cleanup_registered_) {
         return;
     }
+    // Each submission owns a private subtree. Cleanup on every exit path keeps
+    // later runs from inheriting stale files.
     auto remove_path = [&](const std::string &relative) {
         if (relative.empty()) {
             return;
@@ -199,6 +203,8 @@ class WorkspaceDownloadSession {
             if (!incoming.has_file_chunk()) {
                 return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "TaskRequest payload is missing!");
             }
+            // After the initial config, the rest of the stream is treated as an
+            // ordered sequence of file chunks for the uploaded workspace.
             grpc::Status status = HandleFileChunk(incoming.file_chunk());
             if (!status.ok()) {
                 return status;
@@ -222,6 +228,8 @@ class WorkspaceDownloadSession {
             return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Duplicate TaskConfig payload!");
         }
 
+        // Resolve and lock the workspace once, then reuse the normalized paths
+        // for every subsequent file chunk.
         config_ = config;
         grpc::Status path_status = ResolveTaskPaths(workspace_root_, config_, &paths_);
         if (!path_status.ok()) {
@@ -279,6 +287,8 @@ class WorkspaceDownloadSession {
             return grpc::Status::OK;
         }
 
+        // The stream may switch between files at arbitrary chunk boundaries, so
+        // reopen lazily whenever the target path changes.
         CloseCurrentFile();
         std::error_code dir_ec;
         fs::create_directories(target_path.parent_path(), dir_ec);

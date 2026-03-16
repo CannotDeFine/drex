@@ -14,6 +14,7 @@ ABSL_FLAG(std::string, src_dir, "./task", "Local directory to upload to the serv
 ABSL_FLAG(std::string, workspace_subdir, "uploaded_task", "Subdirectory under the server workspace for the uploaded folder.");
 ABSL_FLAG(std::string, command, "", "Command to execute inside the uploaded workspace directory.");
 ABSL_FLAG(bool, pty, false, "Run the remote command under a PTY. Leave disabled for better reliability with batch commands.");
+ABSL_FLAG(int32_t, xsched_utilization, -1, "Initial xsched utilization for the task xqueue (0-100).");
 
 namespace {
 
@@ -23,6 +24,7 @@ struct ClientOptions {
     std::string workspace_subdir;
     std::string command;
     bool enable_pty = false;
+    XSchedConfig xsched;
 };
 
 void PrintStageFailure(int stage, const std::string &message) {
@@ -60,6 +62,8 @@ ClientOptions LoadClientOptions() {
     opts.workspace_subdir = absl::GetFlag(FLAGS_workspace_subdir);
     opts.command = absl::GetFlag(FLAGS_command);
     opts.enable_pty = absl::GetFlag(FLAGS_pty);
+    opts.xsched.xsched_utilization = absl::GetFlag(FLAGS_xsched_utilization);
+    opts.xsched.enabled = opts.xsched.xsched_utilization >= 0;
     return opts;
 }
 
@@ -72,10 +76,16 @@ bool ValidateClientOptions(const ClientOptions &opts) {
         LogClientError("use --command to specify how to execute the uploaded workspace");
         return false;
     }
+    if (opts.xsched.xsched_utilization < -1 || opts.xsched.xsched_utilization > 100) {
+        LogClientError("--xsched_utilization must be in [0, 100]");
+        return false;
+    }
     return true;
 }
 
 bool PrepareWorkspace(const ClientOptions &opts, std::vector<UploadFileSpec> *files, UploadStats *stats) {
+    // Collect and validate everything locally before opening the RPC so obvious
+    // input errors fail fast on the client side.
     LogClientInfo("validating local workspace");
 
     if (!CollectDirectoryFiles(opts.src_dir, files)) {
@@ -95,13 +105,18 @@ bool PrepareWorkspace(const ClientOptions &opts, std::vector<UploadFileSpec> *fi
     }
 
     LogClientInfo("workspace ready: " + std::to_string(stats->file_count) + " files, total " + FormatBytes(stats->total_bytes));
+    if (opts.xsched.enabled) {
+        LogClientInfo("xsched enabled: utilization=" + std::to_string(opts.xsched.xsched_utilization));
+    }
     return true;
 }
 
 int RunClientWorkflow(const ClientOptions &opts, const std::vector<UploadFileSpec> &files, const UploadStats &stats) {
+    // The upload/execution details live in client_api.cc; this entry point only
+    // prepares inputs and interprets the final task result.
     RemoteServiceClient client(grpc::CreateChannel(opts.target, grpc::InsecureChannelCredentials()));
     RemoteServiceClient::TaskSubmitReport report;
-    grpc::Status status = client.TaskSubmit(files, opts.workspace_subdir, opts.command, &report, &stats, opts.enable_pty);
+    grpc::Status status = client.TaskSubmit(files, opts.workspace_subdir, opts.command, &report, &stats, opts.enable_pty, &opts.xsched);
     if (!status.ok()) {
         PrintStageFailure(2, "RPC failed during upload/execution: " + status.error_message());
         return 1;
