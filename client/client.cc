@@ -14,7 +14,7 @@ ABSL_FLAG(std::string, src_dir, "./task", "Local directory to upload to the serv
 ABSL_FLAG(std::string, workspace_subdir, "uploaded_task", "Subdirectory under the server workspace for the uploaded folder.");
 ABSL_FLAG(std::string, command, "", "Command to execute inside the uploaded workspace directory.");
 ABSL_FLAG(bool, pty, false, "Run the remote command under a PTY. Leave disabled for better reliability with batch commands.");
-ABSL_FLAG(int32_t, xsched_utilization, -1, "Initial xsched utilization for the task xqueue (0-100).");
+ABSL_FLAG(int32_t, utilization, -1, "Initial xsched utilization for the task xqueue (0-100).");
 
 namespace {
 
@@ -62,7 +62,7 @@ ClientOptions LoadClientOptions() {
     opts.workspace_subdir = absl::GetFlag(FLAGS_workspace_subdir);
     opts.command = absl::GetFlag(FLAGS_command);
     opts.enable_pty = absl::GetFlag(FLAGS_pty);
-    opts.xsched.xsched_utilization = absl::GetFlag(FLAGS_xsched_utilization);
+    opts.xsched.xsched_utilization = absl::GetFlag(FLAGS_utilization);
     opts.xsched.enabled = opts.xsched.xsched_utilization >= 0;
     return opts;
 }
@@ -77,7 +77,7 @@ bool ValidateClientOptions(const ClientOptions &opts) {
         return false;
     }
     if (opts.xsched.xsched_utilization < -1 || opts.xsched.xsched_utilization > 100) {
-        LogClientError("--xsched_utilization must be in [0, 100]");
+        LogClientError("--utilization must be in [0, 100]");
         return false;
     }
     return true;

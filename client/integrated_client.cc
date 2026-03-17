@@ -40,11 +40,11 @@ struct ProgramOptions {
 void PrintUsage(const char *prog_name) {
     std::cerr << "Usage: " << prog_name
               << " <controller_addr(host:port)> <src_dir> <workspace_subdir> <command> <local_output_dir> <resource_type> <resource_count>"
-                 " [--mem=<mem_req>] [--cores=<core_req>] [--pty] [--xsched_utilization=<0-100>]"
+                 " [--mem=<mem_req>] [--cores=<core_req>] [--pty] [--utilization=<0-100>]"
               << "\n   or: " << prog_name
               << " --controller=<host:port> --src_dir=<dir> --workspace_subdir=<name> --command=<cmd> --type=<resource_type>"
                  " [--count=<n>] [--local_output_dir=<dir>] [--mem=<mem_req>] [--cores=<core_req>] [--pty]"
-                 " [--xsched_utilization=<0-100>]"
+                 " [--utilization=<0-100>]"
               << std::endl;
 }
 
@@ -155,12 +155,12 @@ bool ParseArguments(int argc, char **argv, ProgramOptions *opts) {
                 continue;
             }
 
-            const std::string util_prefix = "--xsched_utilization=";
+            const std::string util_prefix = "--utilization=";
             if (arg.rfind(util_prefix, 0) == 0) {
                 try {
                     opts->xsched.xsched_utilization = std::stoi(arg.substr(util_prefix.size()));
                 } catch (const std::exception &ex) {
-                    std::cerr << "Invalid --xsched_utilization value: " << ex.what() << std::endl;
+                    std::cerr << "Invalid --utilization value: " << ex.what() << std::endl;
                     return false;
                 }
                 continue;
@@ -202,7 +202,7 @@ bool ParseArguments(int argc, char **argv, ProgramOptions *opts) {
     }
 
     if (opts->xsched.xsched_utilization < -1 || opts->xsched.xsched_utilization > 100) {
-        std::cerr << "--xsched_utilization must be in [0, 100]." << std::endl;
+        std::cerr << "--utilization must be in [0, 100]." << std::endl;
         return false;
     }
     opts->xsched.enabled = opts->xsched.xsched_utilization >= 0;

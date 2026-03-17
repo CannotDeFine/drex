@@ -27,7 +27,7 @@ cd /home/cdf/drex
   --src_dir=/home/cdf/drex/application/gpu_up \
   --workspace_subdir=gpu_up_fg \
   --command="chmod +x run.sh && XSCHED_ROOT=/home/cdf/xsched XSCHED_LIB_DIR=/home/cdf/xsched/output/lib GPU_UP_RESET_SYNC=1 ./run.sh fg 1 smoke" \
-  --xsched_utilization=2
+  --utilization=2
 ```
 
 ```bash
@@ -37,7 +37,7 @@ cd /home/cdf/drex
   --src_dir=/home/cdf/drex/application/gpu_up \
   --workspace_subdir=gpu_up_bg \
   --command="chmod +x run.sh && XSCHED_ROOT=/home/cdf/xsched XSCHED_LIB_DIR=/home/cdf/xsched/output/lib ./run.sh bg 1 smoke" \
-  --xsched_utilization=1
+  --utilization=1
 ```
 
 ## 2:0
@@ -49,7 +49,7 @@ cd /home/cdf/drex
   --src_dir=/home/cdf/drex/application/gpu_up \
   --workspace_subdir=gpu_up_fg \
   --command="chmod +x run.sh && XSCHED_ROOT=/home/cdf/xsched XSCHED_LIB_DIR=/home/cdf/xsched/output/lib GPU_UP_RESET_SYNC=1 ./run.sh fg 1 smoke" \
-  --xsched_utilization=2
+  --utilization=2
 ```
 
 ```bash
@@ -59,5 +59,5 @@ cd /home/cdf/drex
   --src_dir=/home/cdf/drex/application/gpu_up \
   --workspace_subdir=gpu_up_bg \
   --command="chmod +x run.sh && XSCHED_ROOT=/home/cdf/xsched XSCHED_LIB_DIR=/home/cdf/xsched/output/lib ./run.sh bg 1 smoke" \
-  --xsched_utilization=0
+  --utilization=0
 ```
