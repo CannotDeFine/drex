@@ -1,6 +1,6 @@
-# rpc-work
+# DReX
 
-`rpc-work` is a small remote execution toolkit built on top of gRPC and bRPC.
+`DReX` is a small remote execution toolkit built on top of gRPC and bRPC.
 
 It supports three main workflows:
 
@@ -86,4 +86,4 @@ Artifacts:
 
 ## Documentation
 
-Detailed command usage and examples are in [docs/usage.md](/home/cdf/rpc-work/docs/usage.md).
+Detailed command usage and examples are in [`docs/usage.md`](docs/usage.md).

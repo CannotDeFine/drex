@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(RemoteService C CXX)
+project(DReX C CXX)
 set(RPC_THIRD_PARTY_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/install" CACHE PATH "Private prefix where bundled third-party dependencies are installed")
 if(EXISTS "${RPC_THIRD_PARTY_PREFIX}")
     list(PREPEND CMAKE_PREFIX_PATH "${RPC_THIRD_PARTY_PREFIX}")

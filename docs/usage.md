@@ -1,6 +1,6 @@
 # Usage
 
-This document describes the current runtime behavior of `rpc-work` and the supported command-line entrypoints.
+This document describes the current runtime behavior of `DReX` and the supported command-line entrypoints.
 
 ## Build Prerequisites
 
