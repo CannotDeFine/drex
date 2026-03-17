@@ -13,7 +13,7 @@ Start `remote_server`:
 
 ```bash
 cd /home/cdf/drex
-./build/remote_server
+./build/server/remote_server
 ```
 
 Submit `fg` first and `bg` second.
@@ -22,21 +22,21 @@ Submit `fg` first and `bg` second.
 
 ```bash
 cd /home/cdf/drex
-./build/remote_client \
+./build/client/remote_client \
   --target=127.0.0.1:8063 \
   --src_dir=/home/cdf/drex/application/gpu_up \
   --workspace_subdir=gpu_up_fg \
-  --command="chmod +x run.sh && XSCHED_ROOT=/home/cdf/xsched XSCHED_LIB_DIR=/home/cdf/xsched/output/lib GPU_UP_RESET_SYNC=1 ./run.sh fg 1 smoke" \
+  --command="chmod +x run.sh && GPU_UP_RESET_SYNC=1 ./run.sh fg 1 smoke" \
   --utilization=2
 ```
 
 ```bash
 cd /home/cdf/drex
-./build/remote_client \
+./build/client/remote_client \
   --target=127.0.0.1:8063 \
   --src_dir=/home/cdf/drex/application/gpu_up \
   --workspace_subdir=gpu_up_bg \
-  --command="chmod +x run.sh && XSCHED_ROOT=/home/cdf/xsched XSCHED_LIB_DIR=/home/cdf/xsched/output/lib ./run.sh bg 1 smoke" \
+  --command="chmod +x run.sh && ./run.sh bg 1 smoke" \
   --utilization=1
 ```
 
@@ -44,20 +44,20 @@ cd /home/cdf/drex
 
 ```bash
 cd /home/cdf/drex
-./build/remote_client \
+./build/client/remote_client \
   --target=127.0.0.1:8063 \
   --src_dir=/home/cdf/drex/application/gpu_up \
   --workspace_subdir=gpu_up_fg \
-  --command="chmod +x run.sh && XSCHED_ROOT=/home/cdf/xsched XSCHED_LIB_DIR=/home/cdf/xsched/output/lib GPU_UP_RESET_SYNC=1 ./run.sh fg 1 smoke" \
+  --command="chmod +x run.sh && GPU_UP_RESET_SYNC=1 ./run.sh fg 1 smoke" \
   --utilization=2
 ```
 
 ```bash
 cd /home/cdf/drex
-./build/remote_client \
+./build/client/remote_client \
   --target=127.0.0.1:8063 \
   --src_dir=/home/cdf/drex/application/gpu_up \
   --workspace_subdir=gpu_up_bg \
-  --command="chmod +x run.sh && XSCHED_ROOT=/home/cdf/xsched XSCHED_LIB_DIR=/home/cdf/xsched/output/lib ./run.sh bg 1 smoke" \
+  --command="chmod +x run.sh && ./run.sh bg 1 smoke" \
   --utilization=0
 ```

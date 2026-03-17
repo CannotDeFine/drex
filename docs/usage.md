@@ -51,7 +51,7 @@ RPC_THIRD_PARTY_PREFIX=/path/to/prefix ./compile.sh
 Run the server from the repository root:
 
 ```bash
-./build/remote_server --address=0.0.0.0 --port=8063
+./build/server/remote_server --address=0.0.0.0 --port=8063
 ```
 
 Available flags:
@@ -72,7 +72,7 @@ Behavior:
 Use `remote_client` to upload a local directory and run a command on the remote server.
 
 ```bash
-./build/remote_client \
+./build/client/remote_client \
   --target=127.0.0.1:8063 \
   --src_dir=/path/to/workspace \
   --workspace_subdir=my_task \
@@ -104,7 +104,7 @@ Notes:
 Use `resource_client` to request resources from the controller and print the assigned nodes.
 
 ```bash
-./build/resource_client \
+./build/client/resource_client \
   --controller=controller_host:port \
   --type=GPU \
   --count=1
@@ -125,7 +125,7 @@ Use `integrated_client` when you want to allocate resources first and then submi
 Positional form:
 
 ```bash
-./build/integrated_client \
+./build/client/integrated_client \
   <controller_addr> \
   <src_dir> \
   <workspace_subdir> \
@@ -139,7 +139,7 @@ Positional form:
 Flag form:
 
 ```bash
-./build/integrated_client \
+./build/client/integrated_client \
   --controller=<host:port> \
   --src_dir=<dir> \
   --workspace_subdir=<name> \
@@ -151,7 +151,7 @@ Flag form:
 Example:
 
 ```bash
-./build/integrated_client \
+./build/client/integrated_client \
   --controller=controller_host:port \
   --src_dir=/path/to/workspace \
   --workspace_subdir=my_task \

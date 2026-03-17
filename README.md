@@ -71,10 +71,10 @@ git submodule update --init --recursive
 
 Artifacts:
 
-- `build/remote_server`
-- `build/remote_client`
-- `build/resource_client`
-- `build/integrated_client`
+- `build/server/remote_server`
+- `build/client/remote_client`
+- `build/client/resource_client`
+- `build/client/integrated_client`
 
 ## Runtime Notes
 
