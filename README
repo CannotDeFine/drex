@@ -1,0 +1,28 @@
+DReX
+====
+
+`DReX` is a small remote execution toolkit built on top of gRPC and bRPC.
+It uploads a local workspace to a remote node, executes a command there, and
+streams terminal output back to the client. It also includes clients for
+resource allocation workflows driven by a controller service.
+
+Repository Layout
+=================
+
+The top-level layout is:
+
+* `client/` - Client-side entrypoints and shared upload / streaming logic
+* `server/` - gRPC server implementation, task execution, and server logging
+* `proto/` - Protocol definitions for gRPC and bRPC services
+* `application/` - Example workloads for GPU and DPU scenarios
+* `docs/` - Usage notes and runtime documentation
+* `scripts/` - Build helpers for vendored dependencies
+* `3rdparty/` - Bundled dependencies and private install prefix
+* `workspace/` - Server-side runtime working root
+
+Usage
+=====
+
+Build requirements, commands, and runtime notes are in `docs/usage.md`.
+Example workloads are in `application/README.md`.
+License information is in `LICENSE`.
