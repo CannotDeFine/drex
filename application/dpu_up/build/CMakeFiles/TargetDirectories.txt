@@ -1,0 +1,5 @@
+/home/cdf/drex/application/dpu_up/build/CMakeFiles/dpu_up_runtime.dir
+/home/cdf/drex/application/dpu_up/build/CMakeFiles/up_fg.dir
+/home/cdf/drex/application/dpu_up/build/CMakeFiles/up_bg.dir
+/home/cdf/drex/application/dpu_up/build/CMakeFiles/edit_cache.dir
+/home/cdf/drex/application/dpu_up/build/CMakeFiles/rebuild_cache.dir

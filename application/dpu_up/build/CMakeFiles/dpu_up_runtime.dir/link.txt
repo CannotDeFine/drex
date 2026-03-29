@@ -1,0 +1,2 @@
+/usr/bin/ar qc libdpu_up_runtime.a CMakeFiles/dpu_up_runtime.dir/src/runtime.cpp.o CMakeFiles/dpu_up_runtime.dir/opt/mellanox/doca/samples/doca_common/pe_common.c.o CMakeFiles/dpu_up_runtime.dir/opt/mellanox/doca/samples/common.c.o CMakeFiles/dpu_up_runtime.dir/opt/mellanox/doca/applications/common/utils.c.o
+/usr/bin/ranlib libdpu_up_runtime.a
