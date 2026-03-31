@@ -1,4 +1,3 @@
-
 #include "remote_service_implement.h"
 
 #include "server_logging.h"

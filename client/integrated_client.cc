@@ -7,6 +7,7 @@
 #include <grpcpp/grpcpp.h>
 
 #include <filesystem>
+#include <algorithm>
 #include <iomanip>
 #include <memory>
 #include <sstream>
@@ -14,13 +15,13 @@
 #include <string>
 #include <vector>
 
-namespace fs = std::filesystem;
-
 namespace {
 
-struct NodeInfo {
+struct ResourceAllocation {
     std::string ip;
     int port = 0;
+    std::string cgroup_path;
+    std::vector<int> cpu_cores;
 };
 
 struct ProgramOptions {
@@ -33,6 +34,7 @@ struct ProgramOptions {
     int resource_count = 0;
     int mem_req = -1;
     int core_req = -1;
+    int pid = -1;
     bool pty = false;
     XSchedConfig xsched;
 };
@@ -40,10 +42,10 @@ struct ProgramOptions {
 void PrintUsage(const char *prog_name) {
     std::cerr << "Usage: " << prog_name
               << " <controller_addr(host:port)> <src_dir> <workspace_subdir> <command> <local_output_dir> <resource_type> <resource_count>"
-                 " [--mem=<mem_req>] [--cores=<core_req>] [--pty] [--utilization=<0-100>]"
+                 " [--mem=<mem_req>] [--cores=<core_req>] [--pid=<pid>] [--pty] [--utilization=<0-100>]"
               << "\n   or: " << prog_name
               << " --controller=<host:port> --src_dir=<dir> --workspace_subdir=<name> --command=<cmd> --type=<resource_type>"
-                 " [--count=<n>] [--local_output_dir=<dir>] [--mem=<mem_req>] [--cores=<core_req>] [--pty]"
+                 " [--count=<n>] [--local_output_dir=<dir>] [--mem=<mem_req>] [--cores=<core_req>] [--pid=<pid>] [--pty]"
                  " [--utilization=<0-100>]"
               << std::endl;
 }
@@ -80,6 +82,7 @@ bool ParseArguments(int argc, char **argv, ProgramOptions *opts) {
         // Defaults for flags mode.
         opts->resource_count = 1;
         opts->local_output_dir = ".";
+        opts->pid = static_cast<int>(::getpid());
 
         for (int i = 1; i < argc; ++i) {
             const std::string arg(argv[i]);
@@ -145,11 +148,22 @@ bool ParseArguments(int argc, char **argv, ProgramOptions *opts) {
             }
 
             const std::string cores_prefix = "--cores=";
+            const std::string pid_prefix = "--pid=";
             if (arg.rfind(cores_prefix, 0) == 0) {
                 try {
                     opts->core_req = std::stoi(arg.substr(cores_prefix.size()));
                 } catch (const std::exception &ex) {
                     std::cerr << "Invalid --cores value: " << ex.what() << std::endl;
+                    return false;
+                }
+                continue;
+            }
+
+            if (arg.rfind(pid_prefix, 0) == 0) {
+                try {
+                    opts->pid = std::stoi(arg.substr(pid_prefix.size()));
+                } catch (const std::exception &ex) {
+                    std::cerr << "Invalid --pid value: " << ex.what() << std::endl;
                     return false;
                 }
                 continue;
@@ -198,6 +212,11 @@ bool ParseArguments(int argc, char **argv, ProgramOptions *opts) {
     }
     if (opts->mem_req < -1 || opts->core_req < -1) {
         std::cerr << "--mem/--cores must be positive integers when provided." << std::endl;
+        return false;
+    }
+
+    if (opts->pid == 0 || opts->pid < -1) {
+        std::cerr << "--pid must be a positive integer when provided." << std::endl;
         return false;
     }
 
@@ -268,8 +287,19 @@ bool ReleaseResource(const std::string &controller_addr, const std::string &task
     return true;
 }
 
-NodeInfo ApplyResourceAndGetNode(const std::string &controller_addr, const std::string &resource_type, int resource_count, int mem_req, int core_req,
-                                 std::string *task_id_out) {
+std::string FormatCpuCores(const std::vector<int> &cpu_cores) {
+    std::ostringstream oss;
+    for (size_t i = 0; i < cpu_cores.size(); ++i) {
+        if (i != 0) {
+            oss << ",";
+        }
+        oss << cpu_cores[i];
+    }
+    return oss.str();
+}
+
+ResourceAllocation ApplyResourceAndGetAllocation(const std::string &controller_addr, const std::string &resource_type, int resource_count, int mem_req, int core_req,
+                                 int pid, std::string *task_id_out) {
     brpc::Channel channel;
     brpc::ChannelOptions options;
     options.protocol = "baidu_std";
@@ -294,6 +324,9 @@ NodeInfo ApplyResourceAndGetNode(const std::string &controller_addr, const std::
     }
     if (core_req > 0) {
         apply_request.set_corereq(core_req);
+    }
+    if (pid > 0) {
+        apply_request.set_pid(pid);
     }
     stub.apply_resource(&apply_cntl, &apply_request, &apply_response, nullptr);
 
@@ -320,10 +353,19 @@ NodeInfo ApplyResourceAndGetNode(const std::string &controller_addr, const std::
         throw std::runtime_error("No node information returned.");
     }
 
-    const hcp::NodeId &node = query_response.rinfos(0).node();
-    NodeInfo info;
-    info.ip = node.ip();
-    info.port = node.port();
+    const hcp::ResourceInfo &resource = query_response.rinfos(0);
+    const hcp::NodeId &node = resource.node();
+    ResourceAllocation info;
+    //info.ip = node.ip();
+    info.ip = "127.0.0.1";
+    //info.port = node.port();
+    info.port = 8063;
+    if (resource.has_cgroup_path()) {
+        info.cgroup_path = resource.cgroup_path();
+    }
+    for (int i = 0; i < resource.cpu_cores_size(); ++i) {
+        info.cpu_cores.push_back(resource.cpu_cores(i));
+    }
     return info;
 }
 
@@ -352,7 +394,7 @@ bool PrepareWorkspace(const ProgramOptions &opts, std::vector<UploadFileSpec> *f
     return true;
 }
 
-std::string FormatNodeTarget(const NodeInfo &node) {
+std::string FormatNodeTarget(const ResourceAllocation &node) {
     if (node.ip.empty()) {
         throw std::runtime_error("Controller returned an empty node IP.");
     }
@@ -395,9 +437,15 @@ int RunIntegratedClient(const ProgramOptions &opts) {
     std::string task_id;
     // The integrated client is a thin orchestration layer: reserve resources,
     // submit the task to the chosen node, then release the reservation.
-    const NodeInfo node = ApplyResourceAndGetNode(opts.controller_addr, opts.resource_type, opts.resource_count, opts.mem_req, opts.core_req, &task_id);
-    const std::string target = FormatNodeTarget(node);
+    const ResourceAllocation allocation = ApplyResourceAndGetAllocation(opts.controller_addr, opts.resource_type, opts.resource_count, opts.mem_req, opts.core_req, opts.pid, &task_id);
+    const std::string target = FormatNodeTarget(allocation);
     LogClientInfo("uploading workspace and executing on " + target);
+    if (!allocation.cgroup_path.empty()) {
+        LogClientInfo("allocated cgroup: " + allocation.cgroup_path);
+    }
+    if (!allocation.cpu_cores.empty()) {
+        LogClientInfo("allocated cpu cores: " + FormatCpuCores(allocation.cpu_cores));
+    }
 
     const int rc = ExecuteTask(target, files, stats, opts.workspace_subdir, opts.command, opts.pty, &opts.xsched);
     if (!ReleaseResource(opts.controller_addr, task_id)) {

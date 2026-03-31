@@ -4,6 +4,8 @@
 #include <butil/logging.h>
 
 #include <iostream>
+#include <sstream>
+#include <unistd.h>
 #include <stdexcept>
 #include <string>
 
@@ -13,12 +15,13 @@ struct ResourceRequest {
     int resource_count = 0;
     int mem_req = -1;
     int core_req = -1;
+    int pid = -1;
 };
 
 void PrintUsage(const char *prog_name) {
     std::cerr << "Usage: " << prog_name
               << " --controller=<host:port> --type=<resource_type> --count=<resource_count>"
-                 " [--mem=<mem_req>] [--cores=<core_req>]"
+                 " [--mem=<mem_req>] [--cores=<core_req>] [--pid=<pid>]"
               << std::endl;
 }
 
@@ -37,6 +40,7 @@ bool ParseArguments(int argc, char **argv, ResourceRequest *req) {
         const std::string count_prefix = "--count=";
         const std::string mem_prefix = "--mem=";
         const std::string cores_prefix = "--cores=";
+        const std::string pid_prefix = "--pid=";
 
         if (arg.rfind(controller_prefix, 0) == 0) {
             req->controller_addr = arg.substr(controller_prefix.size());
@@ -61,6 +65,13 @@ bool ParseArguments(int argc, char **argv, ResourceRequest *req) {
                 req->core_req = std::stoi(arg.substr(cores_prefix.size()));
             } catch (const std::exception &ex) {
                 LOG(ERROR) << "Invalid --cores value: " << ex.what();
+                return false;
+            }
+        } else if (arg.rfind(pid_prefix, 0) == 0) {
+            try {
+                req->pid = std::stoi(arg.substr(pid_prefix.size()));
+            } catch (const std::exception &ex) {
+                LOG(ERROR) << "Invalid --pid value: " << ex.what();
                 return false;
             }
         } else {
@@ -93,6 +104,15 @@ bool ParseArguments(int argc, char **argv, ResourceRequest *req) {
     if (req->mem_req < -1 || req->core_req < -1) {
         LOG(ERROR) << "--mem/--cores must be positive integers when provided.";
         return false;
+    }
+
+    if (req->pid == 0 || req->pid < -1) {
+        LOG(ERROR) << "--pid must be a positive integer when provided.";
+        return false;
+    }
+
+    if (req->pid < 0) {
+        req->pid = static_cast<int>(::getpid());
     }
 
     return true;
@@ -135,6 +155,9 @@ bool ApplyResource(hcp::ResourceControlService_Stub *stub, const ResourceRequest
     if (req.core_req > 0) {
         apply_req.set_corereq(req.core_req);
     }
+    if (req.pid > 0) {
+        apply_req.set_pid(req.pid);
+    }
     stub->apply_resource(&cntl1, &apply_req, &apply_res, nullptr);
 
     if (!CheckStep("apply_resource", cntl1, apply_res.status())) {
@@ -160,6 +183,17 @@ bool QueryResource(hcp::ResourceControlService_Stub *stub, const std::string &ta
     return true;
 }
 
+std::string FormatCpuCores(const hcp::ResourceInfo &info) {
+    std::ostringstream oss;
+    for (int i = 0; i < info.cpu_cores_size(); ++i) {
+        if (i != 0) {
+            oss << ",";
+        }
+        oss << info.cpu_cores(i);
+    }
+    return oss.str();
+}
+
 void PrintAllocatedResources(const hcp::QueryResourceResponse &query_res) {
     // Keep output intentionally simple so shell scripts can parse it without
     // depending on client-side formatting libraries.
@@ -169,7 +203,14 @@ void PrintAllocatedResources(const hcp::QueryResourceResponse &query_res) {
             const hcp::NodeId &node = info.node();
             std::string ip_str = node.ip();
             std::cout << "Resource[" << i << "]: IP=" << ip_str
-                      << ", Port=" << node.port() << std::endl;
+                      << ", Port=" << node.port();
+            if (info.has_cgroup_path()) {
+                std::cout << ", CGroup=" << info.cgroup_path();
+            }
+            if (info.cpu_cores_size() > 0) {
+                std::cout << ", CPUCores=" << FormatCpuCores(info);
+            }
+            std::cout << std::endl;
         }
     }
 }
