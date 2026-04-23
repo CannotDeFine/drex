@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <unistd.h>
+#include <string.h>
 
 #include <errno.h>
 #include <limits.h>
@@ -107,6 +108,7 @@ struct inflight_record {
 	uint32_t task_id;
 	uint64_t comp_val;
 	uint64_t start_ns;
+	uint64_t duration_ns;
 };
 
 struct completion_worker_ctx {
@@ -116,6 +118,7 @@ struct completion_worker_ctx {
 	uint32_t sleep_min_ms;
 	uint32_t sleep_max_ms;
 	uint32_t max_inflight;
+	bool print_task_ms;
 	uint32_t next_ready;
 	uint32_t next_to_wait;
 	uint32_t completed;
@@ -202,8 +205,12 @@ static void *completion_worker(void *arg)
 		}
 
 		uint64_t task_end_ns = get_time_ns();
-		uint64_t task_ms = (task_end_ns - rec->start_ns) / 1000000ULL;
-		printf("Task %u completed in %lld ms\n", rec->task_id, (long long)task_ms);
+		uint64_t task_duration_ns = task_end_ns - rec->start_ns;
+		((struct inflight_record *)rec)->duration_ns = task_duration_ns;
+		if (ctx->print_task_ms) {
+			uint64_t task_ms = task_duration_ns / 1000000ULL;
+			printf("Task %u completed in %lld ms\n", rec->task_id, (long long)task_ms);
+		}
 
 		pthread_mutex_lock(&ctx->mutex);
 		ctx->completed++;
@@ -216,6 +223,61 @@ static void *completion_worker(void *arg)
 	}
 
 	return NULL;
+}
+
+static int compare_u64(const void *lhs, const void *rhs)
+{
+	const uint64_t a = *(const uint64_t *)lhs;
+	const uint64_t b = *(const uint64_t *)rhs;
+	if (a < b)
+		return -1;
+	if (a > b)
+		return 1;
+	return 0;
+}
+
+static void print_summary(uint32_t total_tasks,
+			  uint32_t completed_tasks,
+			  const struct inflight_record *records,
+			  uint64_t total_start_ns,
+			  uint64_t total_end_ns)
+{
+	if (completed_tasks == 0 || total_end_ns <= total_start_ns)
+		return;
+
+	uint64_t *durations = calloc(completed_tasks, sizeof(*durations));
+	if (durations == NULL)
+		return;
+
+	uint64_t sum_ns = 0;
+	for (uint32_t i = 0; i < completed_tasks; ++i) {
+		durations[i] = records[i].duration_ns;
+		sum_ns += durations[i];
+	}
+	qsort(durations, completed_tasks, sizeof(*durations), compare_u64);
+
+	const double total_s = (double)(total_end_ns - total_start_ns) / 1e9;
+	const double throughput = total_s > 0.0 ? (double)completed_tasks / total_s : 0.0;
+	const double avg_ms = (double)sum_ns / (double)completed_tasks / 1e6;
+	const uint64_t p50_ns = durations[(completed_tasks - 1) / 2];
+	const uint64_t p95_ns = durations[((completed_tasks - 1) * 95) / 100];
+	const uint64_t p99_ns = durations[((completed_tasks - 1) * 99) / 100];
+	const uint64_t min_ns = durations[0];
+	const uint64_t max_ns = durations[completed_tasks - 1];
+
+	printf("RESULT total=%u completed=%u total_s=%.6f throughput=%.2f tasks/s avg_ms=%.3f p50_ms=%.3f p95_ms=%.3f p99_ms=%.3f min_ms=%.3f max_ms=%.3f\n",
+	       total_tasks,
+	       completed_tasks,
+	       total_s,
+	       throughput,
+	       avg_ms,
+	       (double)p50_ns / 1e6,
+	       (double)p95_ns / 1e6,
+	       (double)p99_ns / 1e6,
+	       (double)min_ns / 1e6,
+	       (double)max_ns / 1e6);
+	fflush(stdout);
+	free(durations);
 }
 
 /* Run M tasks; each task launches the DPA kernel once and waits for completion. */
@@ -236,6 +298,7 @@ doca_error_t kernel_launch(struct dpa_resources *resources)
 	uint32_t tasks_completed = 0;
 	const uint32_t heartbeat_ms = getenv_u32_or_default("DPA_DEMO_HEARTBEAT_MS", 0);
 	const uint32_t stdout_flush_ms = getenv_u32_or_default("DPA_DEMO_STDOUT_FLUSH_MS", 0);
+	const bool print_task_ms = getenv_u32_or_default("DPA_DEMO_PRINT_TASK_MS", 0) != 0;
 
 	if (max_inflight == 0)
 		max_inflight = 1;
@@ -249,6 +312,8 @@ doca_error_t kernel_launch(struct dpa_resources *resources)
 	bool worker_started = false;
 	bool worker_sync_ready = false;
 	pthread_t worker_thread;
+	uint64_t total_start_ns = 0;
+	uint64_t total_end_ns = 0;
 
 	result = create_doca_dpa_wait_sync_event(resources->doca_dpa, resources->doca_device, &wait_event);
 	if (result != DOCA_SUCCESS)
@@ -272,6 +337,7 @@ doca_error_t kernel_launch(struct dpa_resources *resources)
 	worker_ctx.sleep_min_ms = sleep_min_ms;
 	worker_ctx.sleep_max_ms = sleep_max_ms;
 	worker_ctx.max_inflight = max_inflight;
+	worker_ctx.print_task_ms = print_task_ms;
 	worker_ctx.next_ready = 0;
 	worker_ctx.next_to_wait = 0;
 	worker_ctx.completed = 0;
@@ -307,6 +373,7 @@ doca_error_t kernel_launch(struct dpa_resources *resources)
 	}
 
 	// Kernel launch loop
+	total_start_ns = get_time_ns();
 	for (uint32_t task_id = 0; task_id < m_tasks; task_id++) {
 		if (g_stop_requested)
 			break;
@@ -373,6 +440,7 @@ doca_error_t kernel_launch(struct dpa_resources *resources)
 	goto cleanup;
 
 cleanup:
+	total_end_ns = get_time_ns();
 	restore_stop_signal_handlers(&sig_guard);
 	if (worker_sync_ready) {
 		pthread_mutex_lock(&worker_ctx.mutex);
@@ -392,6 +460,8 @@ cleanup:
 	    worker_ctx.worker_result != DOCA_SUCCESS &&
 	    result == DOCA_SUCCESS)
 		result = worker_ctx.worker_result;
+	if (records != NULL)
+		print_summary(m_tasks, worker_ctx.completed, records, total_start_ns, total_end_ns);
 	if (records != NULL)
 		free(records);
 

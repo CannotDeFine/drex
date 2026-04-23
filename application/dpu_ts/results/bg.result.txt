@@ -1,0 +1,1 @@
+RESULT role=bg completed=6409 submitted=6409 runtime_s=3.000249 throughput=2136.16 kernels/s iters=2000 inflight=1

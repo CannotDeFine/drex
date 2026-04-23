@@ -353,6 +353,7 @@ ResourceAllocation ApplyResourceAndGetAllocation(const std::string &controller_a
         throw std::runtime_error("No node information returned.");
     }
 
+<<<<<<< HEAD
     const hcp::ResourceInfo &resource = query_response.rinfos(0);
     const hcp::NodeId &node = resource.node();
     ResourceAllocation info;
@@ -366,6 +367,14 @@ ResourceAllocation ApplyResourceAndGetAllocation(const std::string &controller_a
     for (int i = 0; i < resource.cpu_cores_size(); ++i) {
         info.cpu_cores.push_back(resource.cpu_cores(i));
     }
+=======
+    const hcp::NodeId &node = query_response.rinfos(0).node();
+    NodeInfo info;
+    info.ip = node.ip();
+    info.ip = "127.0.0.1";
+    info.port = node.port();
+    info.port = 8063;
+>>>>>>> 9b00c53 (add: add dpu_ts test)
     return info;
 }
 

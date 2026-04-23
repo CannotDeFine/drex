@@ -1,0 +1,1 @@
+RESULT role=bg-token completed=3221 submitted=3221 runtime_s=3.000060 throughput=1073.65 kernels/s iters=2000 inflight=1 xq=ready

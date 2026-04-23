@@ -155,6 +155,58 @@ up_bg/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/up_bg.dir/build.make CMakeFiles/up_bg.dir/build
 .PHONY : up_bg/fast
 
+#=============================================================================
+# Target rules for targets named up_fg_race
+
+# Build rule for target.
+up_fg_race: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 up_fg_race
+.PHONY : up_fg_race
+
+# fast build rule for target.
+up_fg_race/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/up_fg_race.dir/build.make CMakeFiles/up_fg_race.dir/build
+.PHONY : up_fg_race/fast
+
+#=============================================================================
+# Target rules for targets named up_bg_race
+
+# Build rule for target.
+up_bg_race: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 up_bg_race
+.PHONY : up_bg_race
+
+# fast build rule for target.
+up_bg_race/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/up_bg_race.dir/build.make CMakeFiles/up_bg_race.dir/build
+.PHONY : up_bg_race/fast
+
+#=============================================================================
+# Target rules for targets named up_fg_demo
+
+# Build rule for target.
+up_fg_demo: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 up_fg_demo
+.PHONY : up_fg_demo
+
+# fast build rule for target.
+up_fg_demo/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/up_fg_demo.dir/build.make CMakeFiles/up_fg_demo.dir/build
+.PHONY : up_fg_demo/fast
+
+#=============================================================================
+# Target rules for targets named up_bg_demo
+
+# Build rule for target.
+up_bg_demo: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 up_bg_demo
+.PHONY : up_bg_demo
+
+# fast build rule for target.
+up_bg_demo/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/up_bg_demo.dir/build.make CMakeFiles/up_bg_demo.dir/build
+.PHONY : up_bg_demo/fast
+
 main/up_bg.o: main/up_bg.cpp.o
 .PHONY : main/up_bg.o
 
@@ -179,6 +231,54 @@ main/up_bg.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/up_bg.dir/build.make CMakeFiles/up_bg.dir/main/up_bg.cpp.s
 .PHONY : main/up_bg.cpp.s
 
+main/up_bg_demo.o: main/up_bg_demo.cpp.o
+.PHONY : main/up_bg_demo.o
+
+# target to build an object file
+main/up_bg_demo.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/up_bg_demo.dir/build.make CMakeFiles/up_bg_demo.dir/main/up_bg_demo.cpp.o
+.PHONY : main/up_bg_demo.cpp.o
+
+main/up_bg_demo.i: main/up_bg_demo.cpp.i
+.PHONY : main/up_bg_demo.i
+
+# target to preprocess a source file
+main/up_bg_demo.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/up_bg_demo.dir/build.make CMakeFiles/up_bg_demo.dir/main/up_bg_demo.cpp.i
+.PHONY : main/up_bg_demo.cpp.i
+
+main/up_bg_demo.s: main/up_bg_demo.cpp.s
+.PHONY : main/up_bg_demo.s
+
+# target to generate assembly for a file
+main/up_bg_demo.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/up_bg_demo.dir/build.make CMakeFiles/up_bg_demo.dir/main/up_bg_demo.cpp.s
+.PHONY : main/up_bg_demo.cpp.s
+
+main/up_bg_race.o: main/up_bg_race.cpp.o
+.PHONY : main/up_bg_race.o
+
+# target to build an object file
+main/up_bg_race.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/up_bg_race.dir/build.make CMakeFiles/up_bg_race.dir/main/up_bg_race.cpp.o
+.PHONY : main/up_bg_race.cpp.o
+
+main/up_bg_race.i: main/up_bg_race.cpp.i
+.PHONY : main/up_bg_race.i
+
+# target to preprocess a source file
+main/up_bg_race.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/up_bg_race.dir/build.make CMakeFiles/up_bg_race.dir/main/up_bg_race.cpp.i
+.PHONY : main/up_bg_race.cpp.i
+
+main/up_bg_race.s: main/up_bg_race.cpp.s
+.PHONY : main/up_bg_race.s
+
+# target to generate assembly for a file
+main/up_bg_race.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/up_bg_race.dir/build.make CMakeFiles/up_bg_race.dir/main/up_bg_race.cpp.s
+.PHONY : main/up_bg_race.cpp.s
+
 main/up_fg.o: main/up_fg.cpp.o
 .PHONY : main/up_fg.o
 
@@ -202,6 +302,54 @@ main/up_fg.s: main/up_fg.cpp.s
 main/up_fg.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/up_fg.dir/build.make CMakeFiles/up_fg.dir/main/up_fg.cpp.s
 .PHONY : main/up_fg.cpp.s
+
+main/up_fg_demo.o: main/up_fg_demo.cpp.o
+.PHONY : main/up_fg_demo.o
+
+# target to build an object file
+main/up_fg_demo.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/up_fg_demo.dir/build.make CMakeFiles/up_fg_demo.dir/main/up_fg_demo.cpp.o
+.PHONY : main/up_fg_demo.cpp.o
+
+main/up_fg_demo.i: main/up_fg_demo.cpp.i
+.PHONY : main/up_fg_demo.i
+
+# target to preprocess a source file
+main/up_fg_demo.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/up_fg_demo.dir/build.make CMakeFiles/up_fg_demo.dir/main/up_fg_demo.cpp.i
+.PHONY : main/up_fg_demo.cpp.i
+
+main/up_fg_demo.s: main/up_fg_demo.cpp.s
+.PHONY : main/up_fg_demo.s
+
+# target to generate assembly for a file
+main/up_fg_demo.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/up_fg_demo.dir/build.make CMakeFiles/up_fg_demo.dir/main/up_fg_demo.cpp.s
+.PHONY : main/up_fg_demo.cpp.s
+
+main/up_fg_race.o: main/up_fg_race.cpp.o
+.PHONY : main/up_fg_race.o
+
+# target to build an object file
+main/up_fg_race.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/up_fg_race.dir/build.make CMakeFiles/up_fg_race.dir/main/up_fg_race.cpp.o
+.PHONY : main/up_fg_race.cpp.o
+
+main/up_fg_race.i: main/up_fg_race.cpp.i
+.PHONY : main/up_fg_race.i
+
+# target to preprocess a source file
+main/up_fg_race.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/up_fg_race.dir/build.make CMakeFiles/up_fg_race.dir/main/up_fg_race.cpp.i
+.PHONY : main/up_fg_race.cpp.i
+
+main/up_fg_race.s: main/up_fg_race.cpp.s
+.PHONY : main/up_fg_race.s
+
+# target to generate assembly for a file
+main/up_fg_race.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/up_fg_race.dir/build.make CMakeFiles/up_fg_race.dir/main/up_fg_race.cpp.s
+.PHONY : main/up_fg_race.cpp.s
 
 opt/mellanox/doca/applications/common/utils.o: opt/mellanox/doca/applications/common/utils.c.o
 .PHONY : opt/mellanox/doca/applications/common/utils.o
@@ -309,13 +457,29 @@ help:
 	@echo "... rebuild_cache"
 	@echo "... dpu_up_runtime"
 	@echo "... up_bg"
+	@echo "... up_bg_demo"
+	@echo "... up_bg_race"
 	@echo "... up_fg"
+	@echo "... up_fg_demo"
+	@echo "... up_fg_race"
 	@echo "... main/up_bg.o"
 	@echo "... main/up_bg.i"
 	@echo "... main/up_bg.s"
+	@echo "... main/up_bg_demo.o"
+	@echo "... main/up_bg_demo.i"
+	@echo "... main/up_bg_demo.s"
+	@echo "... main/up_bg_race.o"
+	@echo "... main/up_bg_race.i"
+	@echo "... main/up_bg_race.s"
 	@echo "... main/up_fg.o"
 	@echo "... main/up_fg.i"
 	@echo "... main/up_fg.s"
+	@echo "... main/up_fg_demo.o"
+	@echo "... main/up_fg_demo.i"
+	@echo "... main/up_fg_demo.s"
+	@echo "... main/up_fg_race.o"
+	@echo "... main/up_fg_race.i"
+	@echo "... main/up_fg_race.s"
 	@echo "... opt/mellanox/doca/applications/common/utils.o"
 	@echo "... opt/mellanox/doca/applications/common/utils.i"
 	@echo "... opt/mellanox/doca/applications/common/utils.s"

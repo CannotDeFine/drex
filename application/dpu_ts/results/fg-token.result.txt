@@ -1,0 +1,1 @@
+RESULT role=fg-token completed=6453 submitted=6453 runtime_s=3.000318 throughput=2150.77 kernels/s iters=2000 inflight=1 xq=ready

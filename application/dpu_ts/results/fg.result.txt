@@ -1,0 +1,1 @@
+RESULT role=fg completed=6629 submitted=6629 runtime_s=3.000315 throughput=2209.43 kernels/s iters=2000 inflight=1

@@ -41,3 +41,45 @@ target_link_libraries(up_fg PRIVATE dpu_up_runtime pthread)
 add_executable(up_bg ${CMAKE_CURRENT_LIST_DIR}/main/up_bg.cpp)
 target_include_directories(up_bg PRIVATE ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(up_bg PRIVATE dpu_up_runtime pthread)
+
+add_executable(up_fg_race ${CMAKE_CURRENT_LIST_DIR}/main/up_fg_race.cpp)
+target_include_directories(up_fg_race PRIVATE ${CMAKE_CURRENT_LIST_DIR}/include)
+target_link_libraries(up_fg_race PRIVATE dpu_up_runtime pthread)
+
+add_executable(up_bg_race ${CMAKE_CURRENT_LIST_DIR}/main/up_bg_race.cpp)
+target_include_directories(up_bg_race PRIVATE ${CMAKE_CURRENT_LIST_DIR}/include)
+target_link_libraries(up_bg_race PRIVATE dpu_up_runtime pthread)
+
+add_executable(up_fg_demo ${CMAKE_CURRENT_LIST_DIR}/main/up_fg_demo.cpp)
+target_include_directories(up_fg_demo PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/include
+    /home/cdf/xsched/include
+    /home/cdf/xsched/preempt/include
+    /home/cdf/xsched/platforms/doca28/hal/include
+    /home/cdf/xsched/utils/include
+    /home/cdf/xsched/protocol/include
+    /home/cdf/xsched/sched/include
+)
+target_link_libraries(up_fg_demo PRIVATE
+    dpu_up_runtime
+    /home/cdf/xsched/build/preempt/libpreempt.so
+    /home/cdf/xsched/build/platforms/doca28/libhaldoca28.so
+    pthread
+)
+
+add_executable(up_bg_demo ${CMAKE_CURRENT_LIST_DIR}/main/up_bg_demo.cpp)
+target_include_directories(up_bg_demo PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/include
+    /home/cdf/xsched/include
+    /home/cdf/xsched/preempt/include
+    /home/cdf/xsched/platforms/doca28/hal/include
+    /home/cdf/xsched/utils/include
+    /home/cdf/xsched/protocol/include
+    /home/cdf/xsched/sched/include
+)
+target_link_libraries(up_bg_demo PRIVATE
+    dpu_up_runtime
+    /home/cdf/xsched/build/preempt/libpreempt.so
+    /home/cdf/xsched/build/platforms/doca28/libhaldoca28.so
+    pthread
+)
