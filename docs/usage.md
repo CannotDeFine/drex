@@ -121,6 +121,18 @@ Main flags:
 * `--command`: command to run inside the uploaded workspace
 * `--pty`: run the command under a PTY, default off
 * `--utilization`: xsched utilization hint in `[0, 100]`, default disabled with `-1`
+* `--update_utilization`: update utilization for a running task identified by `--workspace_subdir`
+
+
+Runtime utilization update example:
+
+```bash
+./build/client/remote_client \
+  --target=127.0.0.1:8063 \
+  --workspace_subdir=my_task \
+  --update_utilization \
+  --utilization=3
+```
 
 Notes:
 

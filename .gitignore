@@ -8,4 +8,5 @@
 /3rdparty/build
 /3rdparty/install
 application/gpu_up/models/*.onnx
+application/gpu_dynamic_up/models/*
 .codex

@@ -15,6 +15,8 @@ class RemoteServiceImplement final : public remote_service::TaskManage::Service 
   public:
     grpc::Status TaskSubmission(grpc::ServerContext *context,
                                 grpc::ServerReaderWriter<remote_service::TaskResponse, remote_service::TaskRequest> *stream) override;
+    grpc::Status UpdateUtilization(grpc::ServerContext *context, const remote_service::UpdateUtilizationRequest *request,
+                                   remote_service::UpdateUtilizationResponse *response) override;
     ~RemoteServiceImplement() override = default;
 
   private:

@@ -2,6 +2,7 @@
 #include "task_executor.h"
 
 #include "server_logging.h"
+#include "task_runtime_control.h"
 
 #include <cerrno>
 #include <chrono>
@@ -142,8 +143,9 @@ void ConfigureXSchedEnvironment(const remote_service::TaskConfig &config) {
     }
 
     // Remote tasks should register with the global xsched server. Global
-    // policy and timeslice belong to xserver; the task only contributes its
-    // per-xqueue utilization hint.
+    // policy and timeslice belong to xserver; the task contributes its
+    // utilization hint and the active policy decides whether it is xqueue or
+    // process scoped.
     setenv("XSCHED_SCHEDULER", "GLB", 1);
     setenv("XSCHED_AUTO_XQUEUE", "ON", 1);
     unsetenv("XSCHED_POLICY");
@@ -469,7 +471,10 @@ grpc::Status TaskExecutor::RunCommand(std::string *combined_output) const {
 
     // Best-effort ensure a dedicated process group exists even if setpgid in child raced.
     (void)setpgid(child.pid, child.pid);
-    return MonitorChildProcess(child, combined_output);
+    RegisterTaskProcessGroup(config_.workspace_subdir(), child.pid);
+    grpc::Status status = MonitorChildProcess(child, combined_output);
+    UnregisterTaskProcessGroup(config_.workspace_subdir(), child.pid);
+    return status;
 }
 
 void TaskExecutor::LogExecutionContext(const fs::path &run_dir) const {

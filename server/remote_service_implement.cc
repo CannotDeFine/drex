@@ -2,6 +2,7 @@
 
 #include "server_logging.h"
 #include "task_executor.h"
+#include "task_runtime_control.h"
 
 #include <filesystem>
 #include <fstream>
@@ -374,4 +375,27 @@ grpc::Status RemoteServiceImplement::DownloadWorkspace(grpc::ServerContext *cont
                                                        const fs::path &workspace_root, TaskConfig *config_out, WorkspaceLockGuard *lock_guard) {
     WorkspaceDownloadSession session(context, stream, workspace_root, lock_guard);
     return session.Run(config_out);
+}
+
+grpc::Status RemoteServiceImplement::UpdateUtilization(grpc::ServerContext *context, const remote_service::UpdateUtilizationRequest *request,
+                                                       remote_service::UpdateUtilizationResponse *response) {
+    (void)context;
+    if (request == nullptr || response == nullptr) {
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "UpdateUtilization request/response must not be null.");
+    }
+
+    const UtilizationUpdateResult result = UpdateTaskProcessUtilization(request->workspace_subdir(), request->utilization());
+    response->set_success(result.success);
+    response->set_message(result.message);
+    for (pid_t pid : result.pids) {
+        response->add_pids(static_cast<int>(pid));
+    }
+
+    if (!result.success) {
+        LogServerWarn("update utilization failed: workspace='" + request->workspace_subdir() + "' error='" + result.message + "'");
+        return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, result.message);
+    }
+
+    LogServerInfo("updated utilization: workspace='" + request->workspace_subdir() + "' utilization=" + std::to_string(request->utilization()));
+    return grpc::Status::OK;
 }

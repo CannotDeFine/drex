@@ -43,6 +43,7 @@ class RemoteServiceClient {
     grpc::Status TaskSubmit(const std::vector<UploadFileSpec> &files, const std::string &workspace_subdir, const std::string &command,
                             TaskSubmitReport *report, const UploadStats *upload_stats = nullptr, bool enable_pty = false,
                             const XSchedConfig *xsched_config = nullptr);
+    grpc::Status UpdateUtilization(const std::string &workspace_subdir, int utilization, remote_service::UpdateUtilizationResponse *response);
 
   private:
     std::unique_ptr<remote_service::TaskManage::Stub> stub_;

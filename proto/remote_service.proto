@@ -44,6 +44,17 @@ message TaskLogChunk {
     bytes data = 1;
 }
 
+message UpdateUtilizationRequest {
+    string workspace_subdir = 1;
+    int32 utilization = 2;
+}
+
+message UpdateUtilizationResponse {
+    bool success = 1;
+    string message = 2;
+    repeated int32 pids = 3;
+}
+
 message TaskResponse {
     oneof payload {
         TaskLogChunk log_chunk = 1;
@@ -53,4 +64,5 @@ message TaskResponse {
 
 service TaskManage {
     rpc TaskSubmission(stream TaskRequest) returns(stream TaskResponse) {}
+    rpc UpdateUtilization(UpdateUtilizationRequest) returns(UpdateUtilizationResponse) {}
 }

@@ -454,3 +454,22 @@ grpc::Status RemoteServiceClient::TaskSubmit(const std::vector<UploadFileSpec> &
 
     return grpc::Status::OK;
 }
+
+grpc::Status RemoteServiceClient::UpdateUtilization(const std::string &workspace_subdir, int utilization,
+                                                    remote_service::UpdateUtilizationResponse *response) {
+    if (workspace_subdir.empty()) {
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "workspace_subdir must not be empty.");
+    }
+    if (utilization < 0 || utilization > 100) {
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "utilization must be in [0, 100].");
+    }
+    if (response == nullptr) {
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "UpdateUtilizationResponse pointer must not be null.");
+    }
+
+    remote_service::UpdateUtilizationRequest request;
+    request.set_workspace_subdir(workspace_subdir);
+    request.set_utilization(utilization);
+    grpc::ClientContext context;
+    return stub_->UpdateUtilization(&context, request, response);
+}

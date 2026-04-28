@@ -3,6 +3,7 @@ add_executable(remote_server
     server_logging.cc
     remote_service_implement.cc
     task_executor.cc
+    task_runtime_control.cc
 )
 target_include_directories(remote_server PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(remote_server
