@@ -68,6 +68,10 @@ fi
 
 mkdir -p "${RESULT_DIR}"
 
+if [[ "${GPU_DYNAMIC_UP_RESET_SYNC:-0}" == "1" ]]; then
+    ipcrm --shmem-key 0xbeef 2>/dev/null || true
+fi
+
 if [[ ! -x "${BUILD_DIR}/up_loop" ]]; then
     bash "${TESTCASE_ROOT}/scripts/build.sh"
 fi

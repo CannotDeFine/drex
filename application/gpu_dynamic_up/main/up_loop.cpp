@@ -57,12 +57,16 @@ int main(int argc, char **argv) {
     INFO("Loading TensorRT model: %s", model_name.c_str());
     TRTModel model(model_name + ".onnx", model_name + ".engine", batch_size);
 
+    ProcessSync psync;
+    psync.Sync(2, "Model build done");
+
     INFO("Warmup started");
     for (long i = 0; i < warmup_count; ++i) {
         model.Infer(stream);
     }
     CUDART_ASSERT(cudaStreamSynchronize(stream));
     INFO("Warmup finished");
+    psync.Sync(4, "Warmup done");
 
     std::ofstream file(out, std::ios::out | std::ios::trunc);
     if (!file.is_open()) {

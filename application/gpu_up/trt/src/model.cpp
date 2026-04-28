@@ -6,6 +6,18 @@
 #include "cuda_assert.h"
 #include "model.h"
 
+#if (NV_TENSORRT_MAJOR > 8) || (NV_TENSORRT_MAJOR == 8 && NV_TENSORRT_MINOR >= 4)
+#define TRT_HAS_MEMORY_POOL_LIMIT 1
+#else
+#define TRT_HAS_MEMORY_POOL_LIMIT 0
+#endif
+
+#if NV_TENSORRT_MAJOR >= 10
+#define TRT_HAS_IO_TENSOR_API 1
+#else
+#define TRT_HAS_IO_TENSOR_API 0
+#endif
+
 void TRTLogger::log(Severity severity, const char *msg) noexcept {
     switch (severity) {
     case Severity::kINTERNAL_ERROR:
@@ -116,7 +128,11 @@ void TRTModel::BuildEngine(const std::string &onnx) {
 
     auto config = builder->createBuilderConfig();
     ASSERT(config, "Failed to create BuilderConfig");
+#if TRT_HAS_MEMORY_POOL_LIMIT
     config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, 2 << 20);
+#else
+    config->setMaxWorkspaceSize(4 << 20);
+#endif
 
     auto profile = builder->createOptimizationProfile();
     ASSERT(profile, "Failed to create OptimizationProfile");
@@ -197,6 +213,7 @@ void TRTModel::InitContext() {
     ctx_ = engine_->createExecutionContext();
     ASSERT(ctx_, "Failed to create IExecutionContext");
 
+#if TRT_HAS_IO_TENSOR_API
     for (int32_t i = 0; i < engine_->getNbIOTensors(); ++i) {
         bool dynamic_shape = false;
         char const* tensor_name_c = engine_->getIOTensorName(i);
@@ -255,8 +272,71 @@ void TRTModel::InitContext() {
         ASSERT(ctx_->setTensorAddress(tensor_name_c, device_buffer), "Failed to bind tensor address for %s", tensor_name_c);
         bindings_.push_back(device_buffer);
     }
+#else
+    for (int32_t i = 0; i < engine_->getNbBindings(); ++i) {
+        bool dynamic_shape = false;
+        char const *tensor_name_c = engine_->getBindingName(i);
+        std::string tensor_name(tensor_name_c);
+        nvinfer1::Dims dims = engine_->getBindingDimensions(i);
+        if (dims.d[0] == -1) {
+            dims.d[0] = batch_size_;
+            dynamic_shape = true;
+        }
+        for (int32_t j = 1; j < dims.nbDims; ++j) {
+            if (dims.d[j] == -1) {
+                dims.d[j] = default_dim_size_;
+                dynamic_shape = true;
+            }
+        }
+
+        if (dynamic_shape && engine_->getNbOptimizationProfiles() > 0) {
+            dims = engine_->getProfileDimensions(i, 0, nvinfer1::OptProfileSelector::kOPT);
+            ASSERT(ctx_->setBindingDimensions(i, dims), "Failed to set binding dimensions for %s", tensor_name_c);
+        }
+
+        nvinfer1::DataType data_type = engine_->getBindingDataType(i);
+        int32_t volume = std::accumulate(dims.d, dims.d + dims.nbDims, 1, std::multiplies<int32_t>());
+        size_t total_size = volume * GetSize(data_type);
+
+        bool is_input = engine_->bindingIsInput(i);
+        std::shared_ptr<Tensor> tensor = std::make_shared<Tensor>(total_size, dims, tensor_name);
+
+        std::string log_str;
+        if (is_input) {
+            log_str = "[MODEL] created input tensor, name: " + tensor_name + ", " + GetTypeName(data_type) + "[" + std::to_string(dims.d[0]);
+            input_tensors_[tensor_name] = tensor;
+        } else {
+            log_str = "[MODEL] created output tensor, name: " + tensor_name + ", " + GetTypeName(data_type) + "[" + std::to_string(dims.d[0]);
+            output_tensors_[tensor_name] = tensor;
+        }
+
+        for (int32_t j = 1; j < dims.nbDims; ++j) {
+            log_str += ", " + std::to_string(dims.d[j]);
+        }
+        log_str += "] (" + std::to_string(total_size) + " Bytes)";
+        INFO("%s", log_str.c_str());
+    }
+
+    bindings_.clear();
+    bindings_.assign(engine_->getNbBindings(), nullptr);
+    for (int32_t i = 0; i < engine_->getNbBindings(); ++i) {
+        char const *tensor_name_c = engine_->getBindingName(i);
+        std::string tensor_name(tensor_name_c);
+        void *device_buffer = nullptr;
+        if (engine_->bindingIsInput(i)) {
+            device_buffer = input_tensors_[tensor_name]->DeviceBuffer();
+        } else {
+            device_buffer = output_tensors_[tensor_name]->DeviceBuffer();
+        }
+        bindings_[i] = device_buffer;
+    }
+#endif
 }
 
 void TRTModel::Enqueue(cudaStream_t stream) {
+#if TRT_HAS_IO_TENSOR_API
     ASSERT(ctx_->enqueueV3(stream), "Failed to enqueue inference");
+#else
+    ASSERT(ctx_->enqueueV2(bindings_.data(), stream, nullptr), "Failed to enqueue inference");
+#endif
 }
