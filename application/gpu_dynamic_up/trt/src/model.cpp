@@ -131,7 +131,7 @@ void TRTModel::BuildEngine(const std::string &onnx) {
 #if TRT_HAS_MEMORY_POOL_LIMIT
     config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, 2 << 20);
 #else
-    config->setMaxWorkspaceSize(4 << 20);
+    config->setMaxWorkspaceSize(2 << 20);
 #endif
 
     auto profile = builder->createOptimizationProfile();

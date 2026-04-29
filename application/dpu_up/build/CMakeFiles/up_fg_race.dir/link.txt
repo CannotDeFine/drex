@@ -1,1 +1,0 @@
-/usr/bin/c++ CMakeFiles/up_fg_race.dir/main/up_fg_race.cpp.o -o up_fg_race  -Wl,-rpath,/opt/mellanox/doca/lib/aarch64-linux-gnu libdpu_up_runtime.a -lpthread /opt/mellanox/doca/lib/aarch64-linux-gnu/libdoca_common.so /opt/mellanox/doca/lib/aarch64-linux-gnu/libdoca_dma.so 

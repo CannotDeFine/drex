@@ -1,1 +1,0 @@
-/usr/bin/c++ CMakeFiles/up_fg.dir/main/up_fg.cpp.o -o up_fg  -Wl,-rpath,/opt/mellanox/doca/lib/aarch64-linux-gnu libdpu_up_runtime.a -lpthread /opt/mellanox/doca/lib/aarch64-linux-gnu/libdoca_common.so /opt/mellanox/doca/lib/aarch64-linux-gnu/libdoca_dma.so 

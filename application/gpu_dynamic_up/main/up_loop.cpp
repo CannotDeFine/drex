@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
@@ -75,27 +76,25 @@ int main(int argc, char **argv) {
     file << "window,elapsed_sec,iterations,throughput" << std::endl;
 
     using clock = std::chrono::steady_clock;
-    const auto start = clock::now();
-    auto window_start = start;
-    int window_idx = 0;
+    const long window_count = (duration_sec + window_sec - 1) / window_sec;
+    const auto benchmark_start = clock::now();
 
-    INFO("Loop benchmark started: duration=%lds window=%lds", duration_sec, window_sec);
-    while (!g_stop) {
-        const auto now = clock::now();
-        const auto elapsed_sec = std::chrono::duration_cast<std::chrono::seconds>(now - start).count();
-        if (elapsed_sec >= duration_sec) {
-            break;
-        }
+    INFO("Loop benchmark started: duration=%lds window=%lds windows=%ld", duration_sec, window_sec, window_count);
+    for (long window_idx = 1; window_idx <= window_count && !g_stop; ++window_idx) {
+        const long current_window_sec = std::min(window_sec, duration_sec - (window_idx - 1) * window_sec);
+        const int start_target = static_cast<int>(4 + (window_idx - 1) * 4 + 2);
+        const int stop_target = static_cast<int>(4 + (window_idx - 1) * 4 + 4);
+
+        psync.Sync(start_target, "Window start");
 
         int64_t count = 0;
-        window_start = clock::now();
+        const auto window_start = clock::now();
         while (!g_stop) {
             model.Infer(stream);
             ++count;
             const auto cur = clock::now();
             const auto win_elapsed = std::chrono::duration_cast<std::chrono::seconds>(cur - window_start).count();
-            const auto total_elapsed = std::chrono::duration_cast<std::chrono::seconds>(cur - start).count();
-            if (win_elapsed >= window_sec || total_elapsed >= duration_sec) {
+            if (win_elapsed >= current_window_sec) {
                 break;
             }
         }
@@ -103,13 +102,14 @@ int main(int argc, char **argv) {
 
         const auto window_end = clock::now();
         const auto window_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(window_end - window_start).count();
-        const auto total_elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(window_end - start).count();
+        const auto total_elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(window_end - benchmark_start).count();
         const double throughput = window_ns > 0 ? static_cast<double>(count) * 1e9 / static_cast<double>(window_ns) : 0.0;
 
-        ++window_idx;
         file << window_idx << ',' << (static_cast<double>(total_elapsed_ms) / 1000.0) << ',' << count << ',' << throughput << std::endl;
         file.flush();
-        INFO("[RESULT] window=%d elapsed=%.1fs throughput %.2f reqs/s", window_idx, static_cast<double>(total_elapsed_ms) / 1000.0, throughput);
+        INFO("[RESULT] window=%ld elapsed=%.1fs throughput %.2f reqs/s", window_idx, static_cast<double>(total_elapsed_ms) / 1000.0, throughput);
+
+        psync.Sync(stop_target, "Window done");
     }
 
     INFO("Loop benchmark finished");

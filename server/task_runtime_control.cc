@@ -85,7 +85,7 @@ std::string GetXcliPath() {
     if (env != nullptr && env[0] != '\0') {
         return env;
     }
-    return "/home/cdf/xsched/output/bin/xcli";
+    return "/home/wyl/xsched/output/bin/xcli";
 }
 
 bool RunXcliHint(pid_t pid, int utilization, std::string *error) {

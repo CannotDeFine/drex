@@ -10,9 +10,9 @@ TESTCASE_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 MODEL_PREFIX=${GPU_DYNAMIC_UP_MODEL_PREFIX:-"${TESTCASE_ROOT}/models/resnet152"}
 RESULT_DIR="${TESTCASE_ROOT}/results"
 BUILD_DIR="${TESTCASE_ROOT}/build"
-XSCHED_ROOT=${XSCHED_ROOT:-/home/cdf/xsched}
+XSCHED_ROOT=${XSCHED_ROOT:-/home/wyl/xsched}
 XSCHED_LIB_DIR=${XSCHED_LIB_DIR:-${XSCHED_ROOT}/output/lib}
-XSCHED_CUDA_LIB=${XSCHED_CUDA_LIB:-}
+XSCHED_CUDA_LIB=${XSCHED_CUDA_LIB:-/usr/lib/x86_64-linux-gnu/libcuda.so.1}
 
 prepend_path() {
     local path="$1"
