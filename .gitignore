@@ -7,7 +7,6 @@
 /worklog.md
 /3rdparty/build
 /3rdparty/install
-application/gpu_up/models/*.onnx
 application/gpu_dynamic_up/models/*
 application/gpu_dynamic_up/build
 .codex
