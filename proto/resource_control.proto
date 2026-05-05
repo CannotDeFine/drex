@@ -8,11 +8,13 @@ message Status {
 }
 
 message ApplyResourceRequest {
-    optional string type = 1;  
-	optional int32 nums = 2;
+    optional string type = 1;
+	optional int32 nums = 2 [default = 1]; 
 	optional int32 memreq = 3;
     optional int32 corereq = 4;
-    optional int32 pid = 5;
+    optional int32 pid = 5;  // 要绑定的进程PID
+    optional bool enable_cgroup = 6;  // 是否启用cgroup资源隔离
+    optional int32 utilizationreq = 7; // 这个申请需要用到多少多少时间片资源（最多为100）
 }
 
 message ApplyResourceResponse {
@@ -31,18 +33,28 @@ message NodeId {
 
 message ResourceInfo {
     optional int32 id = 1;
-    optional string uuid = 2;
+    optional string devid = 2;        // 所属的设备id，例如GPU-0
     optional string type = 3;
     optional int32 devmem = 4;
-    optional int32 devcore = 5;
+    optional int32 devcore = 5;       // 
     optional NodeId node = 6;
-    optional string cgroup_path = 7;
-    repeated int32 cpu_cores = 8;
+    optional string cgroup_path = 7;  // cgroup路径（用于CPU隔离）
+    repeated int32 cpu_cores = 8;     // 分配的CPU核心ID列表
+    optional int32 devutilization = 9; // 这个变量返回申请占用算力的百分比
 }
 
 message QueryResourceResponse {
     required Status status = 1;
     repeated ResourceInfo rinfos = 2;
+}
+
+message UpdateResourceRequest {
+    required string task_id = 1;
+    optional int32 utilizationreq = 2;
+}
+
+message UpdateResourceResponse {
+    required Status status = 1;
 }
 
 message ReleaseResourceRequest {
@@ -54,7 +66,7 @@ message ReleaseResourceResponse {
 }
 
 message DeviceInfo {
-    optional string id = 1;
+    optional string id = 1;   // 设备的名称，例如GPU-0
     optional int32 index = 2;
     optional int32 count = 3;
     optional int32 devmem = 4;
@@ -65,9 +77,10 @@ message DeviceInfo {
 }
 
 message DeviceUsage {
-    optional int32 used = 1;
-    optional int32 usedmem = 2;
-    optional int32 usedcores = 3;
+    optional int32 used = 1 [default = 0];
+    optional int32 usedmem = 2 [default = 0];
+    optional int32 usedcores = 3 [default = 0];
+    optional int32 usedutilization = 4 [default = 0];
 }
 
 message RegisterDeviceRequest {
@@ -86,12 +99,14 @@ message ListDeviceResponse {
 }
 
 message XPU {
-    optional string type = 1;
-    optional int32 devmem = 2;
-    optional int32 devcore = 3;
-    optional NodeId node = 4;
-    optional int32 status = 5;
-    optional string own_taskid = 6;
+    optional string devid = 1;
+    optional string type = 2;
+    optional int32 devmem = 3;
+    optional int32 devcore = 4;
+    optional int32 devutilization = 5;
+    optional NodeId node = 6;
+    optional int32 status = 7;
+    optional string own_taskid = 8;
 }
 
 message ListXPURequest {}
@@ -100,12 +115,37 @@ message ListXPUResponse {
     repeated XPU xpus = 1;
 }
 
+message XpuStatRequest {}
+
+message XpuStatResponse {}
+
+service xpu_stat {
+    rpc default_method(XpuStatRequest) returns (XpuStatResponse);
+}
+
+message DeviceStatRequest {}
+
+message DeviceStatResponse {}
+
+service device_stat {
+    rpc default_method(DeviceStatRequest) returns (DeviceStatResponse);
+}
+message AttachPidRequest {
+    required string task_id = 1;
+    required int32 pid = 2;
+}
+
+message AttachPidResponse {
+    required Status status = 1;
+}
 
 service ResourceControlService {
-    rpc apply_resource(ApplyResourceRequest) returns (ApplyResourceResponse); 
-    rpc query_resource(QueryResourceRequest) returns (QueryResourceResponse); 
+    rpc apply_resource(ApplyResourceRequest) returns (ApplyResourceResponse);
+    rpc update_resource(UpdateResourceRequest) returns (UpdateResourceResponse);
+    rpc query_resource(QueryResourceRequest) returns (QueryResourceResponse);
     rpc release_resource(ReleaseResourceRequest) returns (ReleaseResourceResponse);
     rpc register_device(RegisterDeviceRequest) returns (RegisterDeviceResponse);
     rpc list_device(ListDeviceRequest) returns (ListDeviceResponse);
     rpc list_xpu(ListXPURequest) returns (ListXPUResponse);
+    rpc attach_pid(AttachPidRequest) returns (AttachPidResponse);
 }
