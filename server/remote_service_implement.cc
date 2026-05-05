@@ -45,6 +45,66 @@ std::string DefaultIfEmpty(const std::string &value, const std::string &fallback
     return value.empty() ? fallback : value;
 }
 
+fs::path RuntimeUtilizationPath(const fs::path &workspace_dir) {
+    return workspace_dir / ".drex_utilization";
+}
+
+bool WriteRuntimeUtilizationFile(const std::string &workspace_subdir, int utilization, std::string *error) {
+    if (workspace_subdir.empty()) {
+        if (error != nullptr) {
+            *error = "workspace_subdir must not be empty";
+        }
+        return false;
+    }
+    if (utilization < 0 || utilization > 100) {
+        if (error != nullptr) {
+            *error = "utilization must be in [0, 100]";
+        }
+        return false;
+    }
+
+    std::error_code ec;
+    const fs::path workspace_root = fs::weakly_canonical(kWorkspaceRoot, ec);
+    if (ec) {
+        if (error != nullptr) {
+            *error = "failed to determine server workspace: " + ec.message();
+        }
+        return false;
+    }
+
+    const fs::path workspace_path = LexicallyNormalized(workspace_root, workspace_subdir);
+    if (!IsSubPath(workspace_root, workspace_path)) {
+        if (error != nullptr) {
+            *error = "workspace_subdir escapes server workspace";
+        }
+        return false;
+    }
+
+    fs::create_directories(workspace_path, ec);
+    if (ec) {
+        if (error != nullptr) {
+            *error = "failed to prepare workspace directory: " + ec.message();
+        }
+        return false;
+    }
+
+    std::ofstream file(RuntimeUtilizationPath(workspace_path), std::ios::out | std::ios::trunc);
+    if (!file.is_open()) {
+        if (error != nullptr) {
+            *error = "failed to open runtime utilization file";
+        }
+        return false;
+    }
+    file << utilization << std::endl;
+    if (!file.good()) {
+        if (error != nullptr) {
+            *error = "failed to write runtime utilization file";
+        }
+        return false;
+    }
+    return true;
+}
+
 void SendResult(grpc::ServerReaderWriter<TaskResponse, TaskRequest> *stream, const TaskResult &result) {
     TaskResponse response;
     *response.mutable_result() = result;
@@ -385,8 +445,10 @@ grpc::Status RemoteServiceImplement::UpdateUtilization(grpc::ServerContext *cont
     }
 
     const UtilizationUpdateResult result = UpdateTaskProcessUtilization(request->workspace_subdir(), request->utilization());
+    std::string runtime_file_error;
+    const bool runtime_file_updated = WriteRuntimeUtilizationFile(request->workspace_subdir(), request->utilization(), &runtime_file_error);
     response->set_success(result.success);
-    response->set_message(result.message);
+    response->set_message(runtime_file_updated ? result.message : result.message + "; " + runtime_file_error);
     for (pid_t pid : result.pids) {
         response->add_pids(static_cast<int>(pid));
     }
@@ -394,6 +456,10 @@ grpc::Status RemoteServiceImplement::UpdateUtilization(grpc::ServerContext *cont
     if (!result.success) {
         LogServerWarn("update utilization failed: workspace='" + request->workspace_subdir() + "' error='" + result.message + "'");
         return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, result.message);
+    }
+    if (!runtime_file_updated) {
+        LogServerWarn("update utilization file failed: workspace='" + request->workspace_subdir() + "' error='" + runtime_file_error + "'");
+        return grpc::Status(grpc::StatusCode::INTERNAL, runtime_file_error);
     }
 
     LogServerInfo("updated utilization: workspace='" + request->workspace_subdir() + "' utilization=" + std::to_string(request->utilization()));

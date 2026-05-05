@@ -137,6 +137,27 @@ void ConfigureChildEnvironment(bool want_pty) {
     }
 }
 
+fs::path RuntimeUtilizationPath(const fs::path &workspace_dir) {
+    return workspace_dir / ".drex_utilization";
+}
+
+void WriteRuntimeUtilizationFile(const fs::path &workspace_dir, int utilization) {
+    if (utilization < 0 || utilization > 100) {
+        return;
+    }
+    std::ofstream file(RuntimeUtilizationPath(workspace_dir), std::ios::out | std::ios::trunc);
+    if (file.is_open()) {
+        file << utilization << std::endl;
+    }
+}
+
+void ConfigureDrexRuntimeEnvironment(const remote_service::TaskConfig &config, const fs::path &workspace_dir) {
+    setenv("DREX_UTILIZATION_FILE", RuntimeUtilizationPath(workspace_dir).c_str(), 1);
+    if (config.xsched_enabled() && config.xsched_utilization() >= 0) {
+        WriteRuntimeUtilizationFile(workspace_dir, config.xsched_utilization());
+    }
+}
+
 void ConfigureXSchedEnvironment(const remote_service::TaskConfig &config) {
     if (!config.xsched_enabled()) {
         return;
@@ -174,6 +195,7 @@ grpc::Status TaskExecutor::Execute(remote_service::TaskResult *result) const {
     if (ec) {
         return grpc::Status(grpc::StatusCode::INTERNAL, "Failed to prepare workspace directory for execution!");
     }
+    ConfigureDrexRuntimeEnvironment(config_, run_dir);
 
     LogServerInfo("starting command execution");
     LogServerDebug("starting command in '" + run_dir.string() + "'");
@@ -217,6 +239,7 @@ grpc::Status TaskExecutor::StartChildProcess(ChildProcess *child) const {
             // Put the task in its own process group so cancellation and timeout
             // can terminate the whole tree with killpg().
             ConfigureChildEnvironment(true);
+            ConfigureDrexRuntimeEnvironment(config_, workspace_root_ / config_.workspace_subdir());
             ConfigureXSchedEnvironment(config_);
             if (chdir((workspace_root_ / config_.workspace_subdir()).c_str()) != 0) {
                 _exit(127);
@@ -253,6 +276,7 @@ grpc::Status TaskExecutor::StartChildProcess(ChildProcess *child) const {
         // Put the task in its own process group so cancellation and timeout can
         // terminate the whole tree with killpg().
         ConfigureChildEnvironment(false);
+        ConfigureDrexRuntimeEnvironment(config_, workspace_root_ / config_.workspace_subdir());
         ConfigureXSchedEnvironment(config_);
         if (chdir((workspace_root_ / config_.workspace_subdir()).c_str()) != 0) {
             _exit(127);
