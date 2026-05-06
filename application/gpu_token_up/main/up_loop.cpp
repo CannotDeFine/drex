@@ -151,9 +151,11 @@ int main(int argc, char **argv) {
     CUDART_ASSERT(cudaStreamCreate(&stream));
     INFO("Loading TensorRT model: %s", model_name.c_str());
     TRTModel model(model_name + ".onnx", model_name + ".engine", batch_size);
-
-    ProcessSync psync;
-    psync.Sync(2, "Model build done");
+    if (ParseEnabled(std::getenv("GPU_TOKEN_UP_BUILD_ENGINE_ONLY"))) {
+        INFO("Build-engine-only mode finished");
+        CUDART_ASSERT(cudaStreamDestroy(stream));
+        return 0;
+    }
 
     INFO("Warmup started");
     for (long i = 0; i < warmup_count; ++i) {
@@ -161,7 +163,6 @@ int main(int argc, char **argv) {
     }
     CUDART_ASSERT(cudaStreamSynchronize(stream));
     INFO("Warmup finished");
-    psync.Sync(4, "Warmup done");
 
     std::ofstream file(out, std::ios::out | std::ios::trunc);
     if (!file.is_open()) {
@@ -176,10 +177,6 @@ int main(int argc, char **argv) {
     INFO("Loop benchmark started: duration=%lds window=%lds windows=%ld", duration_sec, window_sec, window_count);
     for (long window_idx = 1; window_idx <= window_count && !g_stop; ++window_idx) {
         const long current_window_sec = std::min(window_sec, duration_sec - (window_idx - 1) * window_sec);
-        const int start_target = static_cast<int>(4 + (window_idx - 1) * 4 + 2);
-        const int stop_target = static_cast<int>(4 + (window_idx - 1) * 4 + 4);
-
-        psync.Sync(start_target, "Window start");
 
         int64_t count = 0;
         const auto window_start = clock::now();
@@ -206,8 +203,6 @@ int main(int argc, char **argv) {
         file << window_idx << ',' << (static_cast<double>(total_elapsed_ms) / 1000.0) << ',' << count << ',' << throughput << std::endl;
         file.flush();
         INFO("[RESULT] window=%ld elapsed=%.1fs throughput %.2f reqs/s", window_idx, static_cast<double>(total_elapsed_ms) / 1000.0, throughput);
-
-        psync.Sync(stop_target, "Window done");
     }
 
     INFO("Loop benchmark finished");

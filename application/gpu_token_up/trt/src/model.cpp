@@ -1,6 +1,7 @@
 #include <fstream>
 #include <iostream>
 #include <numeric>
+#include <cstdlib>
 #include <unistd.h>
 
 #include "cuda_assert.h"
@@ -17,6 +18,23 @@
 #else
 #define TRT_HAS_IO_TENSOR_API 0
 #endif
+
+namespace {
+
+size_t GetWorkspaceBytes() {
+    const char *env = std::getenv("GPU_TOKEN_UP_TRT_WORKSPACE_MB");
+    long workspace_mb = 1024;
+    if (env != nullptr && env[0] != '\0') {
+        char *end = nullptr;
+        const long parsed = std::strtol(env, &end, 10);
+        if (end != env && *end == '\0' && parsed > 0) {
+            workspace_mb = parsed;
+        }
+    }
+    return static_cast<size_t>(workspace_mb) << 20;
+}
+
+} // namespace
 
 void TRTLogger::log(Severity severity, const char *msg) noexcept {
     switch (severity) {
@@ -128,10 +146,11 @@ void TRTModel::BuildEngine(const std::string &onnx) {
 
     auto config = builder->createBuilderConfig();
     ASSERT(config, "Failed to create BuilderConfig");
+    const size_t workspace_bytes = GetWorkspaceBytes();
 #if TRT_HAS_MEMORY_POOL_LIMIT
-    config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, 2 << 20);
+    config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, workspace_bytes);
 #else
-    config->setMaxWorkspaceSize(2 << 20);
+    config->setMaxWorkspaceSize(workspace_bytes);
 #endif
 
     auto profile = builder->createOptimizationProfile();

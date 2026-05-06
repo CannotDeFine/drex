@@ -7,11 +7,11 @@ duration_sec=${3:-120}
 window_sec=${4:-5}
 
 TESTCASE_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
-DEFAULT_MODEL_PREFIX="${TESTCASE_ROOT}/../gpu_dynamic_up/models/resnet152"
+DEFAULT_MODEL_PREFIX="${TESTCASE_ROOT}/models/resnet152"
 MODEL_PREFIX=${GPU_TOKEN_UP_MODEL_PREFIX:-${GPU_DYNAMIC_UP_MODEL_PREFIX:-"${DEFAULT_MODEL_PREFIX}"}}
 RESULT_DIR="${TESTCASE_ROOT}/results"
 BUILD_DIR="${TESTCASE_ROOT}/build"
-XSCHED_ROOT=${XSCHED_ROOT:-/home/wyl/xsched}
+XSCHED_ROOT=${XSCHED_ROOT:-/home/cdf/xsched}
 XSCHED_LIB_DIR=${XSCHED_LIB_DIR:-${XSCHED_ROOT}/output/lib}
 XSCHED_CUDA_LIB=${XSCHED_CUDA_LIB:-/usr/lib/x86_64-linux-gnu/libcuda.so.1}
 
@@ -69,16 +69,39 @@ fi
 
 mkdir -p "${RESULT_DIR}"
 export GPU_TOKEN_UP_TOKEN_THROTTLE=${GPU_TOKEN_UP_TOKEN_THROTTLE:-1}
-
-if [[ "${GPU_DYNAMIC_UP_RESET_SYNC:-0}" == "1" ]]; then
-    ipcrm --shmem-key 0xbeef 2>/dev/null || true
-fi
+export GPU_TOKEN_UP_ENABLE_XSCHED=${GPU_TOKEN_UP_ENABLE_XSCHED:-0}
 
 if [[ ! -x "${BUILD_DIR}/up_loop" ]]; then
     bash "${TESTCASE_ROOT}/scripts/build.sh"
 fi
 
-configure_xsched_preload
+if [[ "${GPU_TOKEN_UP_REBUILD_ENGINE:-1}" == "1" ]]; then
+    rm -f "${MODEL_PREFIX}.engine"
+    env \
+        -u XSCHED_SCHEDULER \
+        -u XSCHED_AUTO_XQUEUE \
+        -u XSCHED_AUTO_XQUEUE_UTILIZATION \
+        -u XSCHED_AUTO_XQUEUE_PRIORITY \
+        -u XSCHED_AUTO_XQUEUE_TIMESLICE \
+        GPU_TOKEN_UP_TOKEN_THROTTLE=0 \
+        GPU_TOKEN_UP_BUILD_ENGINE_ONLY=1 \
+        "${BUILD_DIR}/up_loop" \
+        "${MODEL_PREFIX}" \
+        "${batch_size}" \
+        "${RESULT_DIR}/engine_build_${device_name}.csv" \
+        "1" \
+        "1"
+fi
+
+if [[ "${GPU_TOKEN_UP_ENABLE_XSCHED}" == "1" ]]; then
+    configure_xsched_preload
+else
+    unset XSCHED_SCHEDULER
+    unset XSCHED_AUTO_XQUEUE
+    unset XSCHED_AUTO_XQUEUE_UTILIZATION
+    unset XSCHED_AUTO_XQUEUE_PRIORITY
+    unset XSCHED_AUTO_XQUEUE_TIMESLICE
+fi
 
 exec "${BUILD_DIR}/up_loop" \
     "${MODEL_PREFIX}" \
